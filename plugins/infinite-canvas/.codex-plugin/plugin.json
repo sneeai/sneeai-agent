@@ -1,6 +1,6 @@
 {
   "name": "sneeai",
-  "version": "0.1.0+codex.20260802173941",
+  "version": "0.1.0+codex.20260809141444",
   "description": "Connect Codex to a locally installed Sneeai Agent.",
   "author": {
     "name": "SneeAI",
@@ -36,6 +36,6 @@
     ],
     "brandColor": "#2563EB",
     "composerIcon": "./assets/icon.png",
-    "logo": "./assets/icon.png"
+    "logo": "./assets/logo.png"
   }
 }
