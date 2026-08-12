@@ -26,6 +26,15 @@ export type ProfileInput = {
     body?: Record<string, unknown>;
 };
 
+export class ProfileInputError extends Error {
+    readonly statusCode = 400;
+
+    constructor(message: string) {
+        super(message);
+        this.name = "ProfileInputError";
+    }
+}
+
 /** 从 HTTP/MCP 输入中提取稳定的 profile 和 client 标识。 */
 export function resolveProfile(input: ProfileInput): AgentProfile {
     const headers = normalizeHeaders(input.headers || {});
@@ -68,10 +77,10 @@ export function profileBinding(profile: AgentProfile) {
 }
 
 function normalizeIdentifier(value: unknown, kind: "profile" | "client") {
-    if (typeof value !== "string" && typeof value !== "number") throw new Error(`invalid ${kind} id`);
+    if (typeof value !== "string" && typeof value !== "number") throw new ProfileInputError(`invalid ${kind} id`);
     const text = String(value ?? "").trim();
     const limit = kind === "profile" ? MAX_PROFILE_ID_LENGTH : MAX_CLIENT_ID_LENGTH;
-    if (!text || text.length > limit || /[\u0000-\u001f\u007f]/.test(text)) throw new Error(`invalid ${kind} id`);
+    if (!text || text.length > limit || /[\u0000-\u001f\u007f]/.test(text)) throw new ProfileInputError(`invalid ${kind} id`);
     return text;
 }
 

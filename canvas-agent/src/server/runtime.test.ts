@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import { KAPEAI_RELAY_BASE_URL } from "../agent/codex-provider-policy.js";
 import { codexRuntimeFingerprint } from "../agent/codex-runtime.js";
-import { AGENT_SERVICE, VERSION } from "../config.js";
+import { AGENT_SERVICE, BUILD_ID, RELEASE_ID, VERSION } from "../config.js";
 import { CANVAS_PROFILE_HEADER } from "../profile.js";
 import { PROTOCOL_CAPABILITIES, PROTOCOL_VERSION } from "../protocol.js";
 import { postCanvasAgentTool } from "./mcp.js";
@@ -47,6 +47,10 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
     assert.match(String(publicConfig.deviceId || ""), /^d1:[A-Za-z0-9_-]{43}$/);
     assert.equal(publicConfig.protocolVersion, PROTOCOL_VERSION);
     assert.equal(publicConfig.buildVersion, VERSION);
+    assert.equal(publicConfig.buildId, BUILD_ID);
+    assert.equal(publicConfig.releaseId, RELEASE_ID);
+    assert.equal(configResponse.headers.get("x-canvas-agent-build-id"), BUILD_ID);
+    assert.equal(configResponse.headers.get("x-canvas-agent-release-id"), RELEASE_ID);
 
     const untrustedConfig = await fetch(`${fixture.url}/config`, { headers: { origin: "https://evil.example" } }).then((response) => response.json()) as Record<string, unknown>;
     assert.equal("deviceId" in untrustedConfig, false);
@@ -54,6 +58,8 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
     const health = await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(health.protocolVersion, PROTOCOL_VERSION);
     assert.equal(health.buildVersion, VERSION);
+    assert.equal(health.buildId, BUILD_ID);
+    assert.equal(health.releaseId, RELEASE_ID);
     assert.deepEqual(health.capabilities, PROTOCOL_CAPABILITIES);
     assert.equal(typeof health.diagnostics, "object");
 
@@ -86,10 +92,25 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
 
     const legacyPair = await fetch(`${fixture.url}/pair`, { method: "POST", headers: { origin: DEV_ORIGIN } });
     assert.equal(legacyPair.status, 426);
+
+    const invalidPairClient = await fetch(`${fixture.url}/pair`, {
+        method: "POST",
+        headers: { origin: DEV_ORIGIN, "content-type": "application/json" },
+        body: modernPairBody({ clientId: "x".repeat(201) }),
+    });
+    assert.equal(invalidPairClient.status, 400);
+
+    const invalidProofClient = await fetch(`${fixture.url}/pairing/proof`, {
+        method: "POST",
+        headers: { origin: DEV_ORIGIN, "content-type": "application/json" },
+        body: modernPairBody({ clientId: "bad\nclient", challenge: "unused" }),
+    });
+    assert.equal(invalidProofClient.status, 400);
+
     const paired = await fetch(`${fixture.url}/pair`, {
         method: "POST",
         headers: { origin: DEV_ORIGIN, "content-type": "application/json" },
-        body: modernPairBody(),
+        body: modernPairBody({ clientId: "pair-client" }),
     });
     const connection = await paired.json() as { ok?: boolean; url?: string; token?: string; deviceId?: string; protocolVersion?: number; capabilities?: string[]; buildVersion?: string; pairingTicket?: string; pairingTicketExpiresAt?: number };
     assert.equal(paired.status, 200);
@@ -105,18 +126,18 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
     assert.ok(connection.pairingTicketExpiresAt! > Date.now());
 
     const workspace = await fetch(`${fixture.url}/agent/codex/workspace`, {
-        headers: { origin: DEV_ORIGIN, "x-canvas-agent-token": connection.token! },
+        headers: { origin: DEV_ORIGIN, "x-canvas-agent-token": connection.token!, "x-canvas-client-id": "pair-client" },
     });
     assert.equal(workspace.status, 200);
     assert.equal(fs.existsSync(path.join(fixture.home, ".sneeai-agent", "codex-workspaces", "site", "AGENTS.md")), true);
 
     const wrongOrigin = await fetch(`${fixture.url}/agent/codex/workspace`, {
-        headers: { origin: "https://evil.example", "x-canvas-agent-token": connection.token! },
+        headers: { origin: "https://evil.example", "x-canvas-agent-token": connection.token!, "x-canvas-client-id": "pair-client" },
     });
     assert.equal(wrongOrigin.status, 403);
 
     const localMcp = await fetch(`${fixture.url}/agent/codex/workspace`, {
-        headers: { "x-canvas-agent-token": connection.token! },
+        headers: { "x-canvas-agent-token": connection.token!, "x-canvas-client-id": "pair-client" },
     });
     assert.equal(localMcp.status, 200);
 
@@ -128,20 +149,44 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
     const hiddenRuntime = await fetch(`${fixture.url}/agent/runtime`);
     assert.equal(hiddenRuntime.status, 401);
 
+    const wrongClient = await fetch(`${fixture.url}/agent/codex/workspace`, {
+        headers: { origin: DEV_ORIGIN, "x-canvas-agent-token": connection.token!, "x-canvas-client-id": "other-client" },
+    });
+    assert.equal(wrongClient.status, 401);
+
+    const invalidAuthenticatedClient = await fetch(`${fixture.url}/agent/codex/workspace`, {
+        headers: { origin: DEV_ORIGIN, "x-canvas-agent-token": connection.token!, "x-canvas-client-id": "x".repeat(201) },
+    });
+    assert.equal(invalidAuthenticatedClient.status, 400);
+
+    const invalidEventTicketClient = await fetch(`${fixture.url}/agent/events-ticket`, {
+        method: "POST",
+        headers: { origin: DEV_ORIGIN, "content-type": "application/json", "x-canvas-agent-token": connection.token! },
+        body: JSON.stringify({ clientId: "bad\u0000client" }),
+    });
+    assert.equal(invalidEventTicketClient.status, 400);
+
+    const blankEventTicketClient = await fetch(`${fixture.url}/agent/events-ticket`, {
+        method: "POST",
+        headers: { origin: DEV_ORIGIN, "content-type": "application/json", "x-canvas-agent-token": connection.token! },
+        body: JSON.stringify({ clientId: " " }),
+    });
+    assert.equal(blankEventTicketClient.status, 400);
+
     const ticketResponse = await fetch(`${fixture.url}/agent/events-ticket`, {
         method: "POST",
         headers: { origin: DEV_ORIGIN, "content-type": "application/json", "x-canvas-agent-token": connection.token! },
-        body: JSON.stringify({ clientId: "ticket-client" }),
+        body: JSON.stringify({ clientId: "pair-client" }),
     });
     const ticketBody = await ticketResponse.json() as { ticket?: string };
     assert.equal(ticketResponse.status, 200);
     assert.match(ticketBody.ticket || "", /^cat1\./);
-    const queryTicket = await fetch(`${fixture.url}/events?ticket=${ticketBody.ticket}`, { headers: { origin: DEV_ORIGIN, "x-canvas-client-id": "ticket-client" } });
+    const queryTicket = await fetch(`${fixture.url}/events?ticket=${ticketBody.ticket}`, { headers: { origin: DEV_ORIGIN, "x-canvas-client-id": "pair-client" } });
     assert.equal(queryTicket.status, 401);
-    const ticketEvents = await fetch(`${fixture.url}/events`, { headers: { origin: DEV_ORIGIN, "x-canvas-agent-ticket": ticketBody.ticket!, "x-canvas-client-id": "ticket-client" } });
+    const ticketEvents = await fetch(`${fixture.url}/events`, { headers: { origin: DEV_ORIGIN, "x-canvas-agent-ticket": ticketBody.ticket!, "x-canvas-client-id": "pair-client" } });
     assert.equal(ticketEvents.status, 200);
     await ticketEvents.body?.cancel();
-    const replayedTicket = await fetch(`${fixture.url}/events`, { headers: { origin: DEV_ORIGIN, "x-canvas-agent-ticket": ticketBody.ticket!, "x-canvas-client-id": "ticket-client" } });
+    const replayedTicket = await fetch(`${fixture.url}/events`, { headers: { origin: DEV_ORIGIN, "x-canvas-agent-ticket": ticketBody.ticket!, "x-canvas-client-id": "pair-client" } });
     assert.equal(replayedTicket.status, 401);
 
     const publicConfigAfterPairing = await fetch(`${fixture.url}/config`).then((response) => response.json()) as Record<string, unknown>;
@@ -209,7 +254,7 @@ test("a non-KapeAI provider cannot pair or connect the web Agent", async (t) => 
         const body = await response.json() as { code?: string; error?: string };
         assert.equal(response.status, 403, JSON.stringify(body));
         assert.equal(body.code, "codex_provider_not_allowed");
-        assert.match(body.error || "", /api\.kapeai\.cn\/v1/);
+        assert.equal((body.error || "").includes(KAPEAI_RELAY_BASE_URL), false);
     }
 });
 
@@ -224,7 +269,7 @@ test("an independent KapeAI key lets the web Agent use a second relay", async (t
     await waitForAgent(fixture.url);
     const before = await fetch(`${fixture.url}/config`, { headers: { origin: DEV_ORIGIN } }).then((response) => response.json()) as Record<string, unknown>;
     assert.equal(before.codexMode, "inherit");
-    assert.equal(before.relayBaseUrl, KAPEAI_RELAY_BASE_URL);
+    assert.equal("relayBaseUrl" in before, false);
     assert.equal(before.hasRelayApiKey, false);
 
     const blocked = await fetch(`${fixture.url}/pair`, { method: "POST", headers: { origin: DEV_ORIGIN, "content-type": "application/json" }, body: modernPairBody() });
@@ -234,13 +279,13 @@ test("an independent KapeAI key lets the web Agent use a second relay", async (t
     const paired = await fetch(`${fixture.url}/pair`, {
         method: "POST",
         headers: { origin: DEV_ORIGIN, "content-type": "application/json" },
-        body: modernPairBody({ mode: "isolated", apiKey }),
+        body: modernPairBody({ clientId: "relay-client", mode: "isolated", apiKey, relayBaseUrl: "https://attacker.example/v1" }),
     });
     const connection = await paired.json() as Record<string, unknown>;
     assert.equal(paired.status, 200, JSON.stringify(connection));
     assert.equal(connection.ok, true);
     assert.equal(connection.codexMode, "isolated");
-    assert.equal(connection.relayBaseUrl, KAPEAI_RELAY_BASE_URL);
+    assert.equal("relayBaseUrl" in connection, false);
     assert.equal(connection.hasRelayApiKey, true);
     assert.equal(JSON.stringify(connection).includes(apiKey), false);
 
@@ -254,6 +299,7 @@ test("an independent KapeAI key lets the web Agent use a second relay", async (t
     const isolatedConfig = fs.readFileSync(path.join(isolatedHome, "config.toml"), "utf8");
     const isolatedKeyFile = path.join(isolatedHome, "kapeai-api-key");
     assert.match(isolatedConfig, new RegExp(`base_url = "${KAPEAI_RELAY_BASE_URL.replaceAll(".", "\\.")}"`));
+    assert.equal(isolatedConfig.includes("attacker.example"), false);
     assert.equal(isolatedConfig.includes("relay-a.example"), false);
     assert.equal(isolatedConfig.includes("relay-a-env.example"), false);
     assert.equal(fs.readFileSync(isolatedKeyFile, "utf8").trim(), apiKey);
@@ -267,7 +313,7 @@ test("an independent KapeAI key lets the web Agent use a second relay", async (t
     const rejectedSwitch = await fetch(`${fixture.url}/pair`, {
         method: "POST",
         headers: { origin: DEV_ORIGIN, "content-type": "application/json" },
-        body: modernPairBody({ mode: "inherit" }),
+        body: modernPairBody({ clientId: "relay-client", mode: "inherit" }),
     });
     assert.equal(rejectedSwitch.status, 403);
     const afterRejectedSwitch = await fetch(`${fixture.url}/config`, { headers: { origin: DEV_ORIGIN } }).then((response) => response.json()) as Record<string, unknown>;
@@ -671,6 +717,7 @@ async function pairProfile(url: string, profileId: string, clientId = "") {
 
 function modernPairBody(extra: Record<string, unknown> = {}) {
     return JSON.stringify({
+        clientId: "test-client",
         pairingNonce: crypto.randomBytes(32).toString("base64url"),
         protocolVersion: PROTOCOL_VERSION,
         capabilities: [...PROTOCOL_CAPABILITIES],

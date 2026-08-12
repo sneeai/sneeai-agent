@@ -9,7 +9,9 @@ export const STABLE_USER_HOME = path.resolve(process.env.CANVAS_AGENT_HOME?.trim
 export const CONFIG_DIR = path.join(STABLE_USER_HOME, ".sneeai-agent");
 export const CONFIG_FILE = path.join(CONFIG_DIR, "sneeai-agent.json");
 export const VERSION = readPackageVersion();
-export const AGENT_PROMPT = fs.readFileSync(new URL("../agent-instructions.md", import.meta.url), "utf8");
+export const BUILD_ID = readBuildId();
+export const RELEASE_ID = `${VERSION}+${BUILD_ID}`;
+export const AGENT_PROMPT = readBundledText("../agent-instructions.md", process.env.SNEEAI_AGENT_INSTRUCTIONS, "");
 const DEVICE_ID_PATTERN = /^d1:[A-Za-z0-9_-]{43}$/;
 const initializedWorkspaces = new Set<string>();
 const CONFIG_MODE = 0o600;
@@ -238,10 +240,22 @@ function profileDirectoryName(profileKey: string) {
 
 /** 从当前包信息中读取 Sneeai Agent 版本号。 */
 function readPackageVersion() {
+    const pkg = JSON.parse(readBundledText("../package.json", process.env.SNEEAI_AGENT_PACKAGE_JSON, '{"version":"0.0.0"}')) as { version?: string };
+    return pkg.version || "0.0.0";
+}
+
+/** 生成可区分同版本构建的安全标识；发行构建应显式注入不变的 commit/digest。 */
+function readBuildId() {
+    const configured = process.env.SNEEAI_AGENT_BUILD_ID?.trim() || "source";
+    return /^[A-Za-z0-9._-]{1,128}$/.test(configured) ? configured : "source";
+}
+
+/** Release builds inject text assets so the standalone executable has no source-tree dependency. */
+function readBundledText(relativePath: string, bundled: string | undefined, fallback: string) {
+    if (bundled !== undefined) return bundled;
     try {
-        const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
-        return pkg.version || "0.0.0";
+        return fs.readFileSync(new URL(relativePath, import.meta.url), "utf8");
     } catch {
-        return "0.0.0";
+        return fallback;
     }
 }

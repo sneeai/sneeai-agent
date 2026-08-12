@@ -165,7 +165,7 @@ async function runCodexTurnNow(prompt: string, emit: AgentEmit, attachments: Age
         options.onThread?.(threadId);
         unmaterializedThreadIds.delete(threadId);
         try {
-            await app.startTurn(threadId, prompt, files, options.permissionMode || "request", options.onTurn);
+            await app.startTurn(threadId, prompt, files, options.permissionMode || "request", options.cwd, options.onTurn);
         } catch (error) {
             if (!isRecoverableThreadError(error)) throw error;
             emit("agent_log", { text: `Codex 会话不可用，正在创建新会话：${redactSensitiveText(errorMessage(error))}` });
@@ -173,7 +173,7 @@ async function runCodexTurnNow(prompt: string, emit: AgentEmit, attachments: Age
             threadId = await ensureCodexThread(app, options, emit);
             options.onThread?.(threadId);
             unmaterializedThreadIds.delete(threadId);
-            await app.startTurn(threadId, prompt, files, options.permissionMode || "request", options.onTurn);
+            await app.startTurn(threadId, prompt, files, options.permissionMode || "request", options.cwd, options.onTurn);
         }
     } catch (error) {
         logger.error("Codex turn failed", error);

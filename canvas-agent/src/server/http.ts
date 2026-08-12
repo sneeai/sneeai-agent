@@ -11,13 +11,13 @@ import { canvasCodexConnectionStatus, canvasCodexMode, CodexConnectionInputError
 import type { AgentAttachment, AgentEmit, AgentPermissionMode } from "../agent/types.js";
 import { CanvasCodexControlError, CanvasSession, CanvasToolDecisionError, type CanvasClientAuthorization, type PendingToolProposal } from "../canvas/session.js";
 import { CanvasSessionRegistry } from "../canvas/session-registry.js";
-import { AGENT_SERVICE, canvasAgentDeviceId, DEFAULT_PORT, ensureProfileWorkspace, ensureSiteWorkspace, loadConfig, saveConfig, updateProfileWorkspace, updateSiteWorkspace, VERSION, type CanvasAgentConfig } from "../config.js";
+import { AGENT_SERVICE, BUILD_ID, canvasAgentDeviceId, DEFAULT_PORT, ensureProfileWorkspace, ensureSiteWorkspace, loadConfig, saveConfig, updateProfileWorkspace, updateSiteWorkspace, VERSION, type CanvasAgentConfig } from "../config.js";
 import { EntitlementLeaseRegistry } from "../entitlement-lease.js";
 import { canUsePersistentToken, entitlementRequired, EntitlementVerificationError, verifyPlatformEntitlement } from "../entitlement.js";
 import { createAgentPairingIdentity } from "../pairing-identity.js";
 import { createAgentTicket, EventTicketReplayGuard, EVENT_TICKET_TTL_MS, PAIRING_TICKET_TTL_MS, verifyAgentTicket, type AgentTicketAuthorization, type AgentTicketClaims } from "../pairing-ticket.js";
 import { canvasConnectionUrl, openExternalUrl } from "../pairing.js";
-import { resolveClientId, resolveProfile, type AgentProfile } from "../profile.js";
+import { ProfileInputError, resolveClientId, resolveProfile, type AgentProfile } from "../profile.js";
 import { negotiateProtocol, protocolHeaders, protocolMetadata, REQUIRED_PAIRING_CAPABILITIES, REQUIRED_TOOL_CAPABILITIES } from "../protocol.js";
 import { ToolAuthorizationVerificationError, verifyToolAuthorization } from "../tool-authorization.js";
 import { logger } from "../utils/logger.js";
@@ -236,7 +236,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     app.use((_req, res, next) => {
         res.setHeader("X-Canvas-Agent-Service", AGENT_SERVICE);
         res.setHeader("X-Canvas-Agent-Version", VERSION);
-        Object.entries(protocolHeaders(VERSION)).forEach(([key, value]) => res.setHeader(key, value));
+        Object.entries(protocolHeaders(VERSION, BUILD_ID)).forEach(([key, value]) => res.setHeader(key, value));
         next();
     });
     app.use((req, res, next) => {
@@ -255,12 +255,12 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         if (req.method === "OPTIONS") return void res.json({});
         next();
     });
-    app.get("/health", (_req, res) => res.json({ ...sessions.health(), ...protocolMetadata(VERSION), service: AGENT_SERVICE, version: VERSION, diagnostics: sessions.health() }));
+    app.get("/health", (_req, res) => res.json({ ...sessions.health(), ...protocolMetadata(VERSION, BUILD_ID), service: AGENT_SERVICE, version: VERSION, diagnostics: sessions.health() }));
     app.get("/config", (req, res) => {
         res.setHeader("Cache-Control", "no-store");
         const origin = req.headers.origin || "";
         const trusted = !origin || authorizeAutomaticPairing(origin, process.env.CANVAS_AGENT_PAIR_ORIGINS || "", config.origins || []);
-        res.json({ ok: true, url: config.url, ...protocolMetadata(VERSION), ...(trusted ? {
+        res.json({ ok: true, url: config.url, ...protocolMetadata(VERSION, BUILD_ID), ...(trusted ? {
             deviceId: canvasAgentDeviceId(config),
             instanceKey: pairingIdentity.instanceKey,
             instancePublicKey: pairingIdentity.instancePublicKey,
@@ -274,6 +274,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         if (!negotiation.compatible) return res.status(426).json({ ok: false, code: "protocol_incompatible", missingCapabilities: negotiation.missingCapabilities });
         const profile = rememberProfile(resolveProfile({ origin, body: req.body, headers: req.headers }));
         const clientId = resolveClientId({ origin, body: req.body, headers: req.headers });
+        if (!clientId) return res.status(400).json({ ok: false, error: "invalid client id" });
         const proof = await pairingIdentity.prove(String(req.body?.challenge || ""), {
             origin,
             profileId: profile.id,
@@ -282,7 +283,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
             agentVersion: VERSION,
         }, { now: now() });
         res.setHeader("Cache-Control", "no-store");
-        res.json({ ok: true, service: AGENT_SERVICE, proof, deviceId: canvasAgentDeviceId(config), instanceKey: pairingIdentity.instanceKey, instancePublicKey: pairingIdentity.instancePublicKey, ...protocolMetadata(VERSION), negotiatedCapabilities: negotiation.capabilities });
+        res.json({ ok: true, service: AGENT_SERVICE, proof, deviceId: canvasAgentDeviceId(config), instanceKey: pairingIdentity.instanceKey, instancePublicKey: pairingIdentity.instancePublicKey, ...protocolMetadata(VERSION, BUILD_ID), negotiatedCapabilities: negotiation.capabilities });
     }));
     app.post("/pair", express.json({ limit: "16kb" }), route(async (req, res) => {
         const origin = req.headers.origin || "";
@@ -291,6 +292,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         if (!negotiation.compatible) return res.status(426).json({ ok: false, code: "protocol_incompatible", missingCapabilities: negotiation.missingCapabilities });
         const profile = rememberProfile(resolveProfile({ origin, body: req.body, headers: req.headers }));
         const clientId = resolveClientId({ origin, body: req.body, headers: req.headers });
+        if (!clientId) return res.status(400).json({ ok: false, error: "invalid client id" });
         const deviceId = canvasAgentDeviceId(config);
         const entitlementToken = String(req.headers["x-canvas-agent-entitlement"] || "");
         let entitlement = "";
@@ -339,7 +341,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
             authorization,
         });
         res.setHeader("Cache-Control", "no-store");
-        res.json({ ok: true, url: config.url, token: pairingTicket, pairingTicket, pairingTicketExpiresAt, profileKey: profile.key, deviceId, instanceKey: pairingIdentity.instanceKey, instancePublicKey: pairingIdentity.instancePublicKey, service: AGENT_SERVICE, version: VERSION, ...protocolMetadata(VERSION), negotiatedCapabilities: negotiation.capabilities, ...(authorization ? { pairingConfirmation: pairingIdentity.confirm(String(req.body?.pairingNonce || ""), entitlement, pairingTicket) } : {}), ...publicCodexConnection(config) });
+        res.json({ ok: true, url: config.url, token: pairingTicket, pairingTicket, pairingTicketExpiresAt, profileKey: profile.key, deviceId, instanceKey: pairingIdentity.instanceKey, instancePublicKey: pairingIdentity.instancePublicKey, service: AGENT_SERVICE, version: VERSION, ...protocolMetadata(VERSION, BUILD_ID), negotiatedCapabilities: negotiation.capabilities, ...(authorization ? { pairingConfirmation: pairingIdentity.confirm(String(req.body?.pairingNonce || ""), entitlement, pairingTicket) } : {}), ...publicCodexConnection(config) });
     }));
     app.use(authenticateRequest);
     app.use(express.json({ limit: "30mb" }));
@@ -349,8 +351,12 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     });
     app.post("/agent/events-ticket", route(async (req, res) => {
         const authorization = requestAuthorization(req);
-        const clientId = String(req.body?.clientId || authorization.clientId || "");
-        if (!clientId || clientId.length > 200) return res.status(400).json({ ok: false, error: "invalid client id" });
+        const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body as Record<string, unknown> : {};
+        const hasRequestedClientId = Object.prototype.hasOwnProperty.call(body, "clientId") || Object.prototype.hasOwnProperty.call(body, "client_id");
+        const requestedClientId = resolveClientId({ body: req.body });
+        if (hasRequestedClientId && !requestedClientId) return res.status(400).json({ ok: false, error: "invalid client id" });
+        const clientId = requestedClientId || authorization.clientId;
+        if (!clientId) return res.status(400).json({ ok: false, error: "invalid client id" });
         if (authorization.clientId && authorization.clientId !== clientId) return res.status(401).json({ ok: false, error: "invalid token" });
         await verifyCodexAccess(authorization.profile);
         const ticket = createAgentTicket(config.token, {
@@ -618,13 +624,14 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         const providerBlocked = error instanceof CodexProviderPolicyError;
         const apiKeyRequired = error instanceof CodexRelayApiKeyRequiredError;
         const invalidInput = error instanceof CodexConnectionInputError;
+        const profileInputError = error instanceof ProfileInputError;
         const entitlementError = error instanceof EntitlementVerificationError;
         const toolAuthorizationError = error instanceof ToolAuthorizationVerificationError;
         const toolDecisionError = error instanceof CanvasToolDecisionError;
         const codexControlError = error instanceof CanvasCodexControlError;
         const localFileError = error instanceof LocalFileCapabilityError;
         const fullPermissionError = error instanceof FullPermissionModeError;
-        const typedError = apiKeyRequired || invalidInput || entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError;
+        const typedError = apiKeyRequired || invalidInput || profileInputError || entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError;
         const status = providerBlocked ? 403 : typedError ? error.statusCode : 500;
         const code = providerBlocked ? "codex_provider_not_allowed" : apiKeyRequired ? "relay_api_key_required" : entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError ? error.code : "";
         res.status(status).json({ ok: false, ...(code ? { code } : {}), ...((providerBlocked || apiKeyRequired) ? publicCodexConnection(config) : {}), error: error.message });
@@ -778,7 +785,7 @@ function requestUrl(req: Request, config: CanvasAgentConfig) {
 
 function publicCodexConnection(config: CanvasAgentConfig) {
     const status = canvasCodexConnectionStatus(config);
-    return { codexMode: status.mode, relayBaseUrl: status.relayBaseUrl, hasRelayApiKey: status.hasRelayApiKey };
+    return { codexMode: status.mode, hasRelayApiKey: status.hasRelayApiKey };
 }
 
 /** 设置跨域响应头，并在首次配对时锁定网页来源。 */

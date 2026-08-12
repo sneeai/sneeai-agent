@@ -4,14 +4,18 @@ import test from "node:test";
 import { isProtocolCompatible, negotiateProtocol, PAIRING_CHALLENGE_CAPABILITY, PROTOCOL_CAPABILITIES, PROTOCOL_VERSION, protocolMetadata, REQUIRED_PAIRING_CAPABILITIES, TOOL_AUTHORIZATION_CAPABILITY } from "./protocol.js";
 
 test("protocol metadata separates stable compatibility fields from build identity", () => {
-    const metadata = protocolMetadata("9.8.7");
+    const metadata = protocolMetadata("9.8.7", "commit-abc");
 
     assert.equal(metadata.protocolVersion, PROTOCOL_VERSION);
     assert.equal(metadata.buildVersion, "9.8.7");
+    assert.equal(metadata.buildId, "commit-abc");
+    assert.equal(metadata.releaseId, "9.8.7+commit-abc");
     assert.deepEqual(metadata.capabilities, PROTOCOL_CAPABILITIES);
     assert.ok(metadata.capabilities.includes(TOOL_AUTHORIZATION_CAPABILITY));
     assert.ok(REQUIRED_PAIRING_CAPABILITIES.includes(TOOL_AUTHORIZATION_CAPABILITY));
     assert.ok(REQUIRED_PAIRING_CAPABILITIES.includes(PAIRING_CHALLENGE_CAPABILITY));
+    assert.ok(metadata.capabilities.includes("codex.prompt.v1"));
+    assert.equal(REQUIRED_PAIRING_CAPABILITIES.includes("codex.prompt.v1"), false);
     assert.equal("diagnostics" in metadata, false);
 });
 
@@ -33,6 +37,10 @@ test("protocol negotiation returns an intersection and rejects incompatible offe
         capabilities: REQUIRED_PAIRING_CAPABILITIES.filter((capability) => capability !== TOOL_AUTHORIZATION_CAPABILITY),
     }, REQUIRED_PAIRING_CAPABILITIES);
     assert.equal(missingAuthorization.compatible, false);
+
+    const previousWebsiteCapabilities = PROTOCOL_CAPABILITIES.filter((capability) => capability !== "codex.prompt.v1");
+    const previousWebsite = negotiateProtocol({ protocolVersion: PROTOCOL_VERSION, capabilities: previousWebsiteCapabilities }, REQUIRED_PAIRING_CAPABILITIES);
+    assert.equal(previousWebsite.compatible, true);
 });
 
 test("modern protocol compatibility requires negotiated capabilities, not a non-empty version", () => {

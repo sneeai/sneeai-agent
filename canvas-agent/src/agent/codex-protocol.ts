@@ -13,9 +13,11 @@ export type CodexTurnInput =
 
 type ThreadOptions = {
     approvalPolicy: "never" | "on-request";
-    sandbox: "workspace-write" | "danger-full-access";
+    sandbox: "read-only" | "workspace-write" | "danger-full-access";
     config: JsonRecord;
     cwd?: string;
+    model?: string;
+    ephemeral?: boolean;
 };
 
 type CodexRequestSpec = {
@@ -62,7 +64,7 @@ type CodexRequestSpec = {
         result: Record<string, never>;
     };
     "turn/start": {
-        params: { threadId: string; input: CodexTurnInput[]; approvalPolicy: "never" | "on-request"; sandboxPolicy: { type: "workspaceWrite"; networkAccess: boolean } | { type: "dangerFullAccess" } };
+        params: { threadId: string; input: CodexTurnInput[]; model?: string; approvalPolicy: "never" | "on-request"; sandboxPolicy: { type: "readOnly"; networkAccess: boolean } | { type: "workspaceWrite"; writableRoots: string[]; networkAccess: boolean; excludeTmpdirEnvVar: boolean; excludeSlashTmp: boolean } | { type: "dangerFullAccess" } };
         result: { turn: CodexTurn };
     };
     "turn/interrupt": {

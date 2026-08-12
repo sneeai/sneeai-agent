@@ -18,6 +18,7 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "mcp.tools.v1",
     "entitlement.ed25519.v1",
     TOOL_AUTHORIZATION_CAPABILITY,
+    "codex.prompt.v1",
 ]) as readonly string[];
 
 export const REQUIRED_PAIRING_CAPABILITIES = Object.freeze([
@@ -46,6 +47,8 @@ export type ProtocolMetadata = {
     protocolVersion: typeof PROTOCOL_VERSION;
     capabilities: readonly string[];
     buildVersion: string;
+    buildId: string;
+    releaseId: string;
 };
 
 export type ProtocolNegotiation =
@@ -53,11 +56,13 @@ export type ProtocolNegotiation =
     | { compatible: false; legacy: false; protocolVersion: typeof PROTOCOL_VERSION; capabilities: string[]; missingCapabilities: string[] };
 
 /** 返回稳定的协议字段；调用方应把运行时诊断放到单独的 diagnostics 字段。 */
-export function protocolMetadata(buildVersion: string): ProtocolMetadata {
+export function protocolMetadata(buildVersion: string, buildId = "source"): ProtocolMetadata {
     return {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: [...PROTOCOL_CAPABILITIES],
         buildVersion,
+        buildId,
+        releaseId: `${buildVersion}+${buildId}`,
     };
 }
 
@@ -114,11 +119,13 @@ export function isProtocolCompatible(
 }
 
 /** 统一 HTTP 响应头中的协议元数据，保留既有 service/version 头。 */
-export function protocolHeaders(buildVersion: string) {
-    const metadata = protocolMetadata(buildVersion);
+export function protocolHeaders(buildVersion: string, buildId = "source") {
+    const metadata = protocolMetadata(buildVersion, buildId);
     return {
         "X-Canvas-Agent-Protocol-Version": String(metadata.protocolVersion),
         "X-Canvas-Agent-Capabilities": metadata.capabilities.join(","),
         "X-Canvas-Agent-Build-Version": metadata.buildVersion,
+        "X-Canvas-Agent-Build-Id": metadata.buildId,
+        "X-Canvas-Agent-Release-Id": metadata.releaseId,
     };
 }

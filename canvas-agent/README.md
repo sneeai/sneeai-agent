@@ -30,4 +30,4 @@ npm test
 npm run build
 ```
 
-The current release baseline is `0.3.3`. Publish it only after the website API and the Agent download channel are available.
+The current release baseline is `0.3.4`. Publish it only after the website API and the Agent download channel are available.

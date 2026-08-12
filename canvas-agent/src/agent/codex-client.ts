@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,8 +71,9 @@ export class CodexAppClient {
 
     /** 启动并初始化 Codex app-server。 */
     static async start(emit: AgentEmit, onExit: (client: CodexAppClient) => void, runtimeEnv: NodeJS.ProcessEnv = process.env) {
-        logger.info("Starting Codex app-server", { executable: process.execPath, codex: codexBin() });
-        const child = spawn(process.execPath, [codexBin(), ...canvasCodexAppServerArgs()], {
+        const codex = codexCommand();
+        logger.info("Starting Codex app-server", { executable: codex.command });
+        const child = spawn(codex.command, [...codex.args, ...canvasCodexAppServerArgs()], {
             env: { ...runtimeEnv, HOME: STABLE_USER_HOME, ...(process.platform === "win32" ? { USERPROFILE: STABLE_USER_HOME } : {}), [NESTED_CANVAS_MCP_ENV]: "1" },
             stdio: ["pipe", "pipe", "pipe"],
             windowsHide: true,
@@ -166,9 +168,9 @@ export class CodexAppClient {
     }
 
     /** 启动一个 Codex turn 并等待完成通知；超过 turnTimeoutMs 后中断并抛 TurnTimeoutError。 */
-    async startTurn(threadId: string, prompt: string, images: string[], permissionMode: AgentPermissionMode, onTurn?: (turnId: string) => void, turnTimeoutMs = defaultTurnTimeoutMs()) {
+    async startTurn(threadId: string, prompt: string, images: string[], permissionMode: AgentPermissionMode, cwd?: string, onTurn?: (turnId: string) => void, turnTimeoutMs = defaultTurnTimeoutMs()) {
         this.currentThreadId = threadId;
-        const { turn } = await this.request("turn/start", { threadId, input: codexInput(prompt, images), ...turnSettings(permissionMode) });
+        const { turn } = await this.request("turn/start", { threadId, input: codexInput(prompt, images), ...turnSettings(permissionMode, cwd) });
         const turnId = turn.id;
         if (!turnId) throw new Error("Codex app-server 没有返回 turn id");
         this.currentTurnId = turnId;
@@ -464,6 +466,7 @@ function waitForChildExit(child: ChildProcess, timeoutMs: number) {
 
 /** 生成 Codex 调用 Sneeai Agent MCP 的启动命令。 */
 function canvasAgentMcpCommand() {
+    if (isStandaloneExecutable()) return { command: process.execPath, args: ["mcp"] };
     const current = process.argv.find((arg) => /index\.(t|j)s$/.test(arg)) || "";
     const entry = path.resolve(current || fileURLToPath(new URL("../index.js", import.meta.url)));
     const tsx = path.join(path.dirname(entry), "..", "node_modules", "tsx", "dist", "cli.mjs");
@@ -485,10 +488,12 @@ function threadSettings(permissionMode: AgentPermissionMode, profileId?: string)
     return { approvalPolicy: permissionMode === "full" ? "never" as const : "on-request" as const, sandbox: permissionMode === "full" ? "danger-full-access" as const : "workspace-write" as const, config: codexConfig(permissionMode, profileId) };
 }
 
-function turnSettings(permissionMode: AgentPermissionMode) {
+export function turnSettings(permissionMode: AgentPermissionMode, cwd?: string) {
     return {
         approvalPolicy: permissionMode === "full" ? "never" as const : "on-request" as const,
-        sandboxPolicy: permissionMode === "full" ? { type: "dangerFullAccess" as const } : { type: "workspaceWrite" as const, networkAccess: false },
+        sandboxPolicy: permissionMode === "full"
+            ? { type: "dangerFullAccess" as const }
+            : { type: "workspaceWrite" as const, writableRoots: cwd ? [path.resolve(cwd)] : [], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
     };
 }
 
@@ -556,7 +561,16 @@ function parseMaybeJson(value: unknown) {
     }
 }
 
-/** 定位当前依赖中 Codex CLI 的执行文件。 */
-function codexBin() {
-    return path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js");
+/** Release bundles place the target-platform Codex binary beside the Agent executable. */
+function codexCommand() {
+    if (isStandaloneExecutable()) {
+        const executable = path.join(path.dirname(process.execPath), "codex-runtime", "bin", process.platform === "win32" ? "codex.exe" : "codex");
+        if (!fs.existsSync(executable)) throw new Error(`Sneeai Agent 缺少 Codex 运行组件：${executable}`);
+        return { command: executable, args: [] as string[] };
+    }
+    return { command: process.execPath, args: [path.join(path.dirname(require.resolve("@openai/codex/package.json")), "bin", "codex.js")] };
+}
+
+function isStandaloneExecutable() {
+    return !process.argv.some((arg) => /index\.(t|j)s$/.test(arg));
 }

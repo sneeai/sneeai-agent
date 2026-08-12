@@ -20,7 +20,8 @@ const ISOLATED_RUNTIME_DIR = "codex-runtime";
 const ISOLATED_API_KEY_FILE = "kapeai-api-key";
 const RUNTIME_DIR_MODE = 0o700;
 const RUNTIME_FILE_MODE = 0o600;
-const MAX_API_KEY_LENGTH = 8_192;
+const MIN_API_KEY_LENGTH = 8;
+const MAX_API_KEY_LENGTH = 512;
 const SNEEAI_PLUGIN_KEYS = ["sneeai@sneeai", "sneeai-agent@sneeai"] as const;
 const ISOLATED_CONFIG = `model_provider = "kapeai"\ndisable_response_storage = true\n\n[model_providers.kapeai]\nname = "KapeAI"\nbase_url = "${KAPEAI_RELAY_BASE_URL}"\nwire_api = "responses"\nenv_key = "${KAPEAI_API_KEY_ENV}"\n`;
 const HOST_AUTH_ENV_KEYS = [
@@ -44,7 +45,6 @@ const HOST_AUTH_ENV_KEYS = [
 
 export type CanvasCodexConnectionStatus = {
     mode: CanvasCodexMode;
-    relayBaseUrl: typeof KAPEAI_RELAY_BASE_URL;
     hasRelayApiKey: boolean;
 };
 
@@ -85,8 +85,7 @@ export function canvasCodexMode(config: CanvasAgentConfig = loadConfig()): Canva
 export function canvasCodexConnectionStatus(config: CanvasAgentConfig = loadConfig(), options: CanvasCodexConnectionOptions = {}): CanvasCodexConnectionStatus {
     return {
         mode: canvasCodexMode(config),
-        relayBaseUrl: KAPEAI_RELAY_BASE_URL,
-        hasRelayApiKey: Boolean(readIsolatedApiKey(options.configDir)),
+        hasRelayApiKey: validApiKey(readIsolatedApiKey(options.configDir)),
     };
 }
 
@@ -94,11 +93,11 @@ export function canvasCodexConnectionStatus(config: CanvasAgentConfig = loadConf
 export function configureCanvasCodexConnection(config: CanvasAgentConfig, input: { mode: CanvasCodexMode; apiKey?: string }, options: CanvasCodexConnectionOptions = {}) {
     if (input.mode !== "inherit" && input.mode !== "isolated") throw new CodexConnectionInputError("Codex 连接模式无效");
     if (input.mode === "isolated") {
-        const apiKey = input.apiKey?.trim() || readIsolatedApiKey(options.configDir);
+        const apiKey = input.apiKey === undefined ? readIsolatedApiKey(options.configDir) : input.apiKey;
         if (!apiKey) throw new CodexRelayApiKeyRequiredError();
-        if (apiKey.length > MAX_API_KEY_LENGTH || /[\u0000-\u001f\u007f]/.test(apiKey)) throw new CodexConnectionInputError("KapeAI API Key 格式无效");
+        if (!validApiKey(apiKey)) throw new CodexConnectionInputError("KapeAI API Key 格式无效");
         ensureIsolatedCodexRuntime(options.configDir);
-        if (input.apiKey?.trim()) writeIsolatedApiKey(apiKey, options.configDir);
+        if (input.apiKey !== undefined) writeIsolatedApiKey(apiKey, options.configDir);
     }
     config.codex = { ...config.codex, mode: input.mode };
     saveConfig(config);
@@ -111,6 +110,7 @@ export function canvasCodexRuntimeEnvironment(config: CanvasAgentConfig = loadCo
     if (canvasCodexMode(config) === "inherit") return env;
     const apiKey = readIsolatedApiKey(options.configDir);
     if (!apiKey) throw new CodexRelayApiKeyRequiredError();
+    if (!validApiKey(apiKey)) throw new CodexConnectionInputError("KapeAI API Key 格式无效");
     const codexHome = ensureIsolatedCodexRuntime(options.configDir);
     HOST_AUTH_ENV_KEYS.forEach((key) => delete env[key]);
     env.CODEX_HOME = codexHome;
@@ -161,11 +161,17 @@ function ensureIsolatedCodexRuntime(configDir = CONFIG_DIR) {
 
 function readIsolatedApiKey(configDir = CONFIG_DIR) {
     try {
-        return fs.readFileSync(path.join(configDir, ISOLATED_RUNTIME_DIR, ISOLATED_API_KEY_FILE), "utf8").trim();
+        return fs.readFileSync(path.join(configDir, ISOLATED_RUNTIME_DIR, ISOLATED_API_KEY_FILE), "utf8").replace(/\r?\n$/, "");
     } catch (error) {
         if (errorCode(error) === "ENOENT") return "";
         throw error;
     }
+}
+
+function validApiKey(value: string) {
+    return value.length >= MIN_API_KEY_LENGTH
+        && value.length <= MAX_API_KEY_LENGTH
+        && /^[\x21-\x7e]+$/.test(value);
 }
 
 function writeIsolatedApiKey(apiKey: string, configDir = CONFIG_DIR) {

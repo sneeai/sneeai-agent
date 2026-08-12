@@ -613,7 +613,7 @@ test("website entitlement remains fail-closed across the local HTTP Agent lifecy
         const connection = await jsonBody(response);
         assert.equal(response.status, 200, JSON.stringify(connection));
         assert.equal(connection.codexMode, "isolated");
-        assert.equal(connection.relayBaseUrl, "https://api.kapeai.cn/v1");
+        assert.equal("relayBaseUrl" in connection, false);
         assert.equal(connection.hasRelayApiKey, true);
         assert.equal(JSON.stringify(connection).includes(apiKey), false);
 

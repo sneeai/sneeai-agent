@@ -31,15 +31,16 @@ export type TicketVerification =
 /** 使用本机 Connect token 派生的密钥签发短期、无对话内容的绑定票据。 */
 export function createAgentTicket(
     secret: string,
-    input: { kind: AgentTicketKind; origin: string; profileKey: string; clientId?: string; now?: number; ttlMs?: number; nonce?: string; authorization?: AgentTicketAuthorization },
+    input: { kind: AgentTicketKind; origin: string; profileKey: string; clientId: string; now?: number; ttlMs?: number; nonce?: string; authorization?: AgentTicketAuthorization },
 ) {
+    if (!validClientId(input.clientId)) throw new Error("invalid client id");
     const issuedAt = input.now ?? Date.now();
     const claims: AgentTicketClaims = {
         version: 1,
         kind: input.kind,
         origin: input.origin,
         profileKey: input.profileKey,
-        clientId: input.clientId || "",
+        clientId: input.clientId,
         issuedAt,
         expiresAt: issuedAt + (input.ttlMs ?? (input.kind === "events" ? EVENT_TICKET_TTL_MS : PAIRING_TICKET_TTL_MS)),
         nonce: input.nonce || crypto.randomBytes(16).toString("hex"),
@@ -68,7 +69,7 @@ export function verifyAgentTicket(
     let claims: AgentTicketClaims;
     try {
         const parsed = JSON.parse(decode(parts[1])) as Partial<AgentTicketClaims>;
-        if (parsed.version !== 1 || (parsed.kind !== "pairing" && parsed.kind !== "events") || typeof parsed.origin !== "string" || typeof parsed.profileKey !== "string" || typeof parsed.clientId !== "string" || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.nonce !== "string" || !validAuthorization(parsed.authorization)) return { ok: false, reason: "invalid" };
+        if (parsed.version !== 1 || (parsed.kind !== "pairing" && parsed.kind !== "events") || typeof parsed.origin !== "string" || typeof parsed.profileKey !== "string" || !validClientId(parsed.clientId) || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.nonce !== "string" || !validAuthorization(parsed.authorization)) return { ok: false, reason: "invalid" };
         claims = parsed as AgentTicketClaims;
     } catch {
         return { ok: false, reason: "invalid" };
@@ -81,6 +82,10 @@ export function verifyAgentTicket(
     // 调用方声明 clientId 时票据必须严格相等；票据为空 clientId 同样拒绝（不匹配任何声明）。
     if (expected.clientId !== undefined && claims.clientId !== expected.clientId) return { ok: false, reason: "client" };
     return { ok: true, claims };
+}
+
+function validClientId(value: unknown): value is string {
+    return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function validAuthorization(value: unknown) {

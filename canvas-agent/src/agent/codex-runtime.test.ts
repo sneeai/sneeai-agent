@@ -87,7 +87,6 @@ test("isolated Canvas Codex runtime uses only its KapeAI profile and credential"
     assert.equal(runtimeConfig.includes("kape-user-secret"), false);
     assert.deepEqual(canvasCodexConnectionStatus({ url: "local", token: "token", codex: { mode: "isolated" } }, { configDir: root }), {
         mode: "isolated",
-        relayBaseUrl: "https://api.kapeai.cn/v1",
         hasRelayApiKey: true,
     });
     if (process.platform !== "win32") {
@@ -108,6 +107,34 @@ test("isolated Canvas Codex runtime refuses to start without a KapeAI credential
         () => configureCanvasCodexConnection({ url: "local", token: "token" }, { mode: "isolated", apiKey: "invalid\nkey" }, { configDir: root }),
         (error: unknown) => error instanceof CodexConnectionInputError,
     );
+    for (const invalid of ["short", "invalid key", " valid-key", "valid-key ", "含非ASCII字符的密钥"]) {
+        assert.throws(
+            () => configureCanvasCodexConnection({ url: "local", token: "token" }, { mode: "isolated", apiKey: invalid }, { configDir: root }),
+            (error: unknown) => error instanceof CodexConnectionInputError,
+            invalid,
+        );
+    }
+
+    const runtimeHome = path.join(root, "codex-runtime");
+    fs.mkdirSync(runtimeHome, { recursive: true });
+    fs.writeFileSync(path.join(runtimeHome, "kapeai-api-key"), "stored-key-with-space \n", { mode: 0o600 });
+    assert.throws(
+        () => canvasCodexRuntimeEnvironment({ url: "local", token: "token", codex: { mode: "isolated" } }, { configDir: root, env: {} }),
+        (error: unknown) => error instanceof CodexConnectionInputError,
+    );
+});
+
+test("a printable KapeAI key enters the existing isolated runtime flow", (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-agent-valid-key-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const config = { url: "local", token: "token" };
+
+    const status = configureCanvasCodexConnection(config, { mode: "isolated", apiKey: "kape-test-key_1234567890" }, { configDir: root });
+    const env = canvasCodexRuntimeEnvironment(config, { configDir: root, env: {} });
+
+    assert.deepEqual(status, { mode: "isolated", hasRelayApiKey: true });
+    assert.equal(env[KAPEAI_API_KEY_ENV], "kape-test-key_1234567890");
+    assert.match(fs.readFileSync(path.join(root, "codex-runtime", "config.toml"), "utf8"), /base_url = "https:\/\/api\.kapeai\.cn\/v1"/);
 });
 
 test("inherited Canvas Codex runtime leaves the host Codex environment intact", () => {

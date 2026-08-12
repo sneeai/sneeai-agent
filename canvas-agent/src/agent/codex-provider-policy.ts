@@ -8,7 +8,7 @@ export type CodexProviderPolicyDecision = { kind: "subscription" } | { kind: "re
 export type CodexProviderPolicyOptions = { account: CodexAccount; config: JsonRecord; env?: RuntimeEnvironment };
 
 const BASE_URL_ENV_KEYS = ["CODEX_BASE_URL", "OPENAI_BASE_URL"] as const;
-const BLOCKED_MESSAGE = `当前 Codex 使用的是其他中转。请在网页中为 Agent 开启独立中转并填写 ${KAPEAI_RELAY_BASE_URL} 的 API Key，或让当前 Codex 使用 ChatGPT 订阅/KapeAI。`;
+const BLOCKED_MESSAGE = "当前 Codex 使用的是其他中转。请在网页中为 Agent 开启独立 KapeAI 中转并填写 API Key，或让当前 Codex 使用 ChatGPT 订阅/KapeAI。";
 
 export class CodexProviderPolicyError extends Error {
     readonly statusCode = 403;

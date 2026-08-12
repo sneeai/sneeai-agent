@@ -2,7 +2,6 @@
 import { startHttpServer, waitForHttpServer } from "./server/http.js";
 import { startMcpServer } from "./server/mcp.js";
 import { loadConfig, saveConfig } from "./config.js";
-import { KAPEAI_RELAY_BASE_URL } from "./agent/codex-provider-policy.js";
 import { canvasConnectionUrl, DEFAULT_CANVAS_URL, openExternalUrl, probeAgent } from "./pairing.js";
 import { VERSION } from "./config.js";
 
@@ -39,10 +38,10 @@ if (args[0] === "mcp") {
         console.log(`Canvas URL: ${pairedUrl}`);
         await openExternalUrl(pairedUrl);
     } else if (status === "provider-blocked") {
-        console.error(`当前 Codex 中转不受支持。请在网页中开启 Agent 独立中转并填写 ${KAPEAI_RELAY_BASE_URL} 的 API Key，或使用 ChatGPT 订阅/KapeAI。`);
+        console.error("当前 Codex 中转不受支持。请在网页中开启 Agent 独立 KapeAI 中转并填写 API Key，或使用 ChatGPT 订阅/KapeAI。");
         process.exitCode = 1;
     } else if (status === "api-key-required") {
-        console.error(`Agent 独立中转尚未配置，请在网页中填写 ${KAPEAI_RELAY_BASE_URL} 的 API Key。`);
+        console.error("Agent 独立中转尚未配置，请在网页中填写 KapeAI API Key。");
         process.exitCode = 1;
     } else if (status === "unauthorized") {
         console.error("本机端口已有 Sneeai Agent，但 Connect token 与配置不一致。请停止旧 Agent 后重新运行此命令。");
