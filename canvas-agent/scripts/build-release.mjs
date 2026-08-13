@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+const ARCHIVE_MTIME = new Date("2000-01-01T00:00:00.000Z");
 const RELEASE_DIR_MODE = 0o755;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const MANAGED_RELEASE_FILE_PATTERN = /^sneeai-agent-[0-9A-Za-z][0-9A-Za-z.+_-]*-(?:macos|windows)-(?:arm64|x64)\.(?:tar\.gz|zip)(?:\.sha256)?$/;
@@ -120,22 +121,61 @@ export function npmPackArguments(codexPackageVersion, destination) {
     ];
 }
 
-export function archiveInvocation(specification, stage, bundle, archive) {
-    const commonEnvironment = { COPYFILE_DISABLE: "1" };
+export function archiveInvocation(specification, stage, bundle, archive, memberList, archiveCommand = "tar") {
+    const commonEnvironment = { COPYFILE_DISABLE: "1", TZ: "UTC" };
+    const commonArguments = [
+        "--no-acls",
+        "--no-fflags",
+        "--no-xattrs",
+        "--uid", "0",
+        "--gid", "0",
+        "--uname", "",
+        "--gname", "",
+        "--null",
+        "--no-recursion",
+        "-C", stage,
+        "-T", memberList,
+    ];
     if (specification.archive === "zip") {
         return {
-            command: "tar",
-            args: ["--format", "zip", "--options", "zip:compression=deflate", "--no-xattrs", "-C", stage, "-cf", archive, path.basename(bundle)],
-            cwd: root,
+            command: archiveCommand,
+            args: ["-q", "-X", "-9", archive, "-@"],
+            cwd: stage,
             environment: commonEnvironment,
+            stdinFile: memberList,
         };
     }
     return {
-        command: "tar",
-        args: ["-C", stage, "-czf", archive, path.basename(bundle)],
+        command: archiveCommand,
+        args: ["--format", "ustar", "--options", "gzip:!timestamp", "-czf", archive, ...commonArguments],
         cwd: root,
         environment: commonEnvironment,
     };
+}
+
+export async function prepareArchiveBundle(stage, bundle) {
+    const directories = [bundle];
+    const files = [];
+    await collectArchiveEntries(bundle, directories, files);
+    directories.sort(compareArchivePaths);
+    files.sort(compareArchivePaths);
+
+    for (const directory of directories) {
+        await chmod(directory, 0o755);
+        await setModificationTime(directory, ARCHIVE_MTIME);
+    }
+    for (const file of files) {
+        await chmod(file, isExecutableArchiveFile(file) ? 0o755 : 0o644);
+        await setModificationTime(file, ARCHIVE_MTIME);
+    }
+
+    const members = [...directories, ...files]
+        .map((entry) => path.relative(stage, entry).split(path.sep).join("/"));
+    const nullMemberList = path.join(stage, ".archive-members-null");
+    const lineMemberList = path.join(stage, ".archive-members-lines");
+    await writeFile(nullMemberList, `${members.join("\0")}\0`);
+    await writeFile(lineMemberList, `${members.join("\n")}\n`);
+    return { nullMemberList, lineMemberList };
 }
 
 export function bunBuildEnvironment(environment, { instructions, agentVersion, buildId }) {
@@ -283,7 +323,12 @@ async function buildTarget({ plan, specification, instructions, releaseStage, co
 
         const archiveName = `${bundleName}.${specification.archive}`;
         const archive = path.join(releaseStage, archiveName);
-        const invocation = archiveInvocation(specification, stage, bundle, archive);
+        const memberLists = await prepareArchiveBundle(stage, bundle);
+        const archiveCommand = specification.archive === "zip"
+            ? await resolveZipCommand(environment)
+            : await resolveArchiveCommand(environment);
+        const memberList = specification.archive === "zip" ? memberLists.lineMemberList : memberLists.nullMemberList;
+        const invocation = archiveInvocation(specification, stage, bundle, archive, memberList, archiveCommand);
         await run(invocation.command, invocation.args, {
             ...invocation,
             environment: { ...environment, ...invocation.environment },
@@ -403,6 +448,68 @@ async function listFiles(directory) {
     return files;
 }
 
+async function collectArchiveEntries(directory, directories, files) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    entries.sort((left, right) => Buffer.from(left.name).compare(Buffer.from(right.name)));
+    for (const entry of entries) {
+        if (entry.name === ".DS_Store" || entry.name.startsWith("._")) continue;
+        const absolute = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+            directories.push(absolute);
+            await collectArchiveEntries(absolute, directories, files);
+        } else if (entry.isFile()) {
+            files.push(absolute);
+        } else {
+            throw new Error(`Unsupported release bundle entry: ${absolute}`);
+        }
+    }
+}
+
+function compareArchivePaths(left, right) {
+    return Buffer.from(left).compare(Buffer.from(right));
+}
+
+function isExecutableArchiveFile(file) {
+    const name = path.basename(file);
+    return name === "sneeai-agent"
+        || name === "sneeai-agent.exe"
+        || name === "codex"
+        || name === "codex.exe"
+        || name === "codex-code-mode-host"
+        || name === "codex-code-mode-host.exe"
+        || name === "rg"
+        || name === "rg.exe"
+        || name === "zsh"
+        || name.endsWith(".exe");
+}
+
+async function setModificationTime(file, time) {
+    await utimes(file, time, time);
+}
+
+async function resolveArchiveCommand(environment) {
+    const candidates = process.platform === "win32" ? ["bsdtar", "tar.exe", "tar"] : ["bsdtar", "tar"];
+    for (const candidate of candidates) {
+        try {
+            const version = await capture(candidate, ["--version"], { cwd: root, environment });
+            if (/bsdtar|libarchive/i.test(version)) return candidate;
+        } catch {
+            // Try the next platform-provided tar executable.
+        }
+    }
+    throw new Error("A libarchive bsdtar executable is required for reproducible release archives");
+}
+
+async function resolveZipCommand(environment) {
+    try {
+        const version = await capture("zip", ["-v"], { cwd: root, environment });
+        if (/Info-ZIP/i.test(version)) return "zip";
+    } catch {
+        // Report one stable error below.
+    }
+    throw new Error("Info-ZIP is required for reproducible Windows release archives");
+}
+
 async function readJSON(file) {
     return JSON.parse(await readFile(file, "utf8"));
 }
@@ -413,9 +520,15 @@ function releaseReadme(platform) {
         : "Sneeai Agent\n\n首次启动：在终端进入本目录，运行 ./sneeai-agent。保持终端运行，然后返回 sneeai.com 的 Agent 面板重新检测。\n";
 }
 
-function run(command, args, { cwd = root, environment = process.env } = {}) {
+function run(command, args, { cwd = root, environment = process.env, stdinFile } = {}) {
     return new Promise((resolve, reject) => {
-        const child = spawn(command, args, { cwd, env: environment, stdio: "inherit" });
+        const child = spawn(command, args, { cwd, env: environment, stdio: [stdinFile ? "pipe" : "inherit", "inherit", "inherit"] });
+        if (stdinFile) {
+            readFile(stdinFile).then((contents) => child.stdin.end(contents), (error) => {
+                child.kill();
+                reject(error);
+            });
+        }
         child.once("error", reject);
         child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`${command} exited with ${code}`)));
     });
