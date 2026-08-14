@@ -34,11 +34,13 @@ export type CanvasAgentConfig = {
 export function loadConfig(create = false): CanvasAgentConfig {
     try {
         const config = readConfig();
+        const needsUrlMigration = config.url === "local";
+        if (needsUrlMigration) config.url = effectiveCanvasAgentUrl(config.url);
         const needsDeviceId = !config.deviceId;
         if (needsDeviceId) config.deviceId = legacyDeviceId(config.token);
         if (create) {
             secureConfigPaths();
-            if (needsDeviceId) saveConfig(config);
+            if (needsUrlMigration || needsDeviceId) saveConfig(config);
         }
         return config;
     } catch (error) {
@@ -91,6 +93,7 @@ function readConfig() {
         throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`);
     }
     const config = parsed as CanvasAgentConfig;
+    if (config.url !== "local") parseLoopbackAgentUrl(config.url);
     if (config.deviceId !== undefined && !DEVICE_ID_PATTERN.test(config.deviceId)) throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`);
     return config;
 }
@@ -120,10 +123,43 @@ function writeConfigFile(file: string, config: CanvasAgentConfig) {
 
 function defaultConfig(): CanvasAgentConfig {
     return {
-        url: `http://127.0.0.1:${Number(process.env.PORT) || DEFAULT_PORT}`,
+        url: effectiveCanvasAgentUrl("local"),
         token: crypto.randomBytes(18).toString("hex"),
         deviceId: `d1:${crypto.randomBytes(32).toString("base64url")}`,
     };
+}
+
+/** 将已验证的本机地址统一为 MCP/HTTP 桥接实际使用的 IPv4 回环地址。 */
+export function effectiveCanvasAgentUrl(value: string) {
+    const configuredPort = validAgentPort(process.env.PORT);
+    if (value === "local") return `http://127.0.0.1:${configuredPort || DEFAULT_PORT}`;
+    const parsed = parseLoopbackAgentUrl(value);
+    return `http://127.0.0.1:${configuredPort || validAgentPort(parsed.port) || DEFAULT_PORT}`;
+}
+
+function parseLoopbackAgentUrl(value: string) {
+    let parsed: URL;
+    try {
+        parsed = new URL(value);
+    } catch (error) {
+        throw invalidConfigError(error);
+    }
+    if (parsed.protocol !== "http:" ||
+        !["127.0.0.1", "localhost", "[::1]"].includes(parsed.hostname) ||
+        parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash ||
+        parsed.port && !validAgentPort(parsed.port)) {
+        throw invalidConfigError();
+    }
+    return parsed;
+}
+
+function validAgentPort(value: string | undefined) {
+    const port = Number(value);
+    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : 0;
+}
+
+function invalidConfigError(cause?: unknown) {
+    return new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`, cause === undefined ? undefined : { cause });
 }
 
 /** 返回稳定的本机设备 ID；旧配置按现有随机 token 确定性回填。 */

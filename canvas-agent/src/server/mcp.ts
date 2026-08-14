@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 
 import { CANVAS_AGENT_PROFILE_ENV, codexRuntimeFingerprint, NESTED_CANVAS_MCP_ENV } from "../agent/codex-runtime.js";
 import { toolDescriptions, toolInputSchemas, toolNames, type ToolName } from "../canvas/schemas.js";
-import { AGENT_PROMPT, AGENT_SERVICE, DEFAULT_PORT, loadConfig, saveConfig, type CanvasAgentConfig, VERSION } from "../config.js";
+import { AGENT_PROMPT, AGENT_SERVICE, effectiveCanvasAgentUrl, loadConfig, saveConfig, type CanvasAgentConfig, VERSION } from "../config.js";
 import { probeAgentRuntime, requestAgentHandoff, type AgentRuntimeProbeResult } from "../pairing.js";
 import { isProtocolCompatible, PROTOCOL_VERSION, REQUIRED_TOOL_CAPABILITIES } from "../protocol.js";
 import { CANVAS_PROFILE_HEADER } from "../profile.js";
@@ -138,8 +138,7 @@ async function claimHttpBridge(fingerprint: string, initial?: AgentRuntimeProbeR
 
 function effectiveConfig() {
     const config = loadConfig(true);
-    const port = Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
-    const url = `http://127.0.0.1:${port}`;
+    const url = effectiveCanvasAgentUrl(config.url);
     if (config.url !== url) {
         config.url = url;
         saveConfig(config);

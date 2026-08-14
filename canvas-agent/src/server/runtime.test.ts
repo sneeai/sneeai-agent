@@ -477,7 +477,7 @@ test("a deferred handoff retries when the bridge becomes busy between probe and 
 test("a nested Codex MCP reuses its owning bridge even when fingerprints differ", async (t) => {
     const fixture = await runtimeFixture(t);
     const token = "nested-runtime-token";
-    writeConfig(fixture.home, { url: fixture.url, token });
+    writeConfig(fixture.home, { url: "local", token });
     let runtimeProbes = 0;
     let handoffRequests = 0;
     const occupant = createServer((req, res) => {
@@ -501,10 +501,18 @@ test("a nested Codex MCP reuses its owning bridge even when fingerprints differ"
     const child = startMcpRuntime(fixture, { env: { CANVAS_AGENT_NESTED_MCP: "1" } });
     t.after(() => stopChild(child));
     await waitFor(() => runtimeProbes > 0, 4_000);
-    await delay(100);
+    child.stdin?.write(`${JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "legacy-local-test", version: "1.0.0" } },
+    })}\n`);
+    await waitFor(() => child.stdoutText().length > 0, 2_000);
 
     assert.equal(child.exitCode, null, child.stderrText());
     assert.equal(handoffRequests, 0);
+    assert.equal(child.stdoutText().split("\n").map((line) => JSON.parse(line) as { id?: number; result?: unknown }).some((message) => message.id === 1 && Boolean(message.result)), true);
+    assert.equal(readAgentConfig(fixture.home).url, fixture.url);
 });
 
 test("browser origins cannot request an Agent runtime handoff", async (t) => {

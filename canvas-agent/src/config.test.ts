@@ -77,6 +77,44 @@ test("legacy config receives one persistent device id", async (t) => {
     if (process.platform !== "win32") assert.equal(fs.statSync(configFile).mode & 0o777, 0o600);
 });
 
+test("legacy local URL migrates to the effective loopback port and persists", async (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-agent-legacy-url-"));
+    const configDir = path.join(home, ".sneeai-agent");
+    const configFile = path.join(configDir, "sneeai-agent.json");
+    fs.mkdirSync(configDir);
+    fs.writeFileSync(configFile, JSON.stringify({ url: "local", token: "legacy-local-token" }));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+    const config = await runLoadedConfigChild(home, { PORT: "18452" });
+    const saved = JSON.parse(fs.readFileSync(configFile, "utf8")) as { url?: string };
+
+    assert.equal(config.url, "http://127.0.0.1:18452");
+    assert.equal(saved.url, config.url);
+});
+
+test("config accepts only standard HTTP loopback URLs", async (t) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-agent-loopback-url-"));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+    for (const [index, url] of ["http://127.0.0.1:17371", "http://localhost:17371", "http://[::1]:17371"].entries()) {
+        const home = path.join(root, `valid-${index}`);
+        writeConfigFixture(home, { url, token: "loopback-token" });
+        assert.equal((await runLoadedConfigChild(home)).url, url);
+    }
+
+    for (const [index, url] of [
+        "not-a-url",
+        "https://127.0.0.1:17371",
+        "http://agent.example:17371",
+        "http://127.0.0.1:17371/private",
+        "http://user@127.0.0.1:17371",
+    ].entries()) {
+        const home = path.join(root, `invalid-${index}`);
+        writeConfigFixture(home, { url, token: "invalid-url-token" });
+        await assert.rejects(runLoadedConfigChild(home), /Sneeai Agent .*无效/);
+    }
+});
+
 function runConfigChild({ home, readyDir, releaseFile, id }: { home: string; readyDir: string; releaseFile: string; id: string }) {
     const script = `
         import fs from "node:fs";
@@ -174,6 +212,32 @@ function runDeviceIdChild(home: string) {
         child.once("error", reject);
         child.once("exit", (code) => (code === 0 ? resolve(stdout.trim()) : reject(new Error(stderr || `device id child exited with ${code}`))));
     });
+}
+
+function runLoadedConfigChild(home: string, environment: Record<string, string> = {}) {
+    const script = `
+        const { loadConfig } = await import(${JSON.stringify(CONFIG_MODULE_URL)});
+        process.stdout.write(JSON.stringify(loadConfig(true)));
+    `;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], {
+        cwd: path.dirname(fileURLToPath(import.meta.url)),
+        env: { ...process.env, CANVAS_AGENT_HOME: home, HOME: home, USERPROFILE: home, PORT: "", ...environment },
+        stdio: ["ignore", "pipe", "pipe"],
+    });
+    return new Promise<{ url: string; token: string }>((resolve, reject) => {
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.once("error", reject);
+        child.once("exit", (code) => (code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr || `config child exited with ${code}`))));
+    });
+}
+
+function writeConfigFixture(home: string, config: { url: string; token: string }) {
+    const configDir = path.join(home, ".sneeai-agent");
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, "sneeai-agent.json"), JSON.stringify(config));
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs: number) {
