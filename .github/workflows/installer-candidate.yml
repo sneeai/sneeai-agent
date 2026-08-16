@@ -86,6 +86,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: sneeai-agent-windows-x64-candidate
-          path: ${{ runner.temp }}/sneeai-agent-installer-candidate/*
+          path: |
+            ${{ runner.temp }}/sneeai-agent-installer-candidate/*
+            canvas-agent/release/sneeai-agent-0.3.5-windows-x64.zip
+            canvas-agent/release/sneeai-agent-0.3.5-windows-x64.zip.sha256
+            canvas-agent/release/manifest.json
           if-no-files-found: error
           retention-days: 3
