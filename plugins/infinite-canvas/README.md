@@ -18,14 +18,19 @@ Windows PowerShell uses `"$PWD"` instead of `"$(pwd)"`.
 ## Use
 
 1. Install this Codex plugin once.
-2. Start a Codex task that uses SneeAI. Codex opens the SneeAI OAuth flow when authorization is needed.
-3. Approve the requested SneeAI permissions, then say: `打开并连接 SneeAI Canvas`.
+2. Start a Codex task that uses SneeAI. If authorization is missing, the plugin starts the
+   supported `codex mcp login sneeai` flow and opens the authorization page for you; you do not
+   need to copy a URL, run a command, or configure a token.
+3. Approve the requested SneeAI permissions in the opened page, then say: `打开并连接 SneeAI Canvas`.
 
 Codex stores and refreshes the OAuth session for the public client `sneeai-codex-plugin`. This client ID is not a secret. The plugin never receives a website password, refresh token, API key, local file path, or another user's session. If the remote MCP service is unavailable or authorization expires, Codex reports a retryable connection error and offers OAuth login again.
 
 The remote endpoint is declared in `.mcp.json` as `https://sneeai.com/api/v1/agent/mcp`. It must advertise standard MCP OAuth metadata before a production release; a configuration file alone does not create the server endpoint.
 
-Use Codex's supported MCP OAuth login flow when the service requests authorization. Current Codex clients also expose `codex mcp login sneeai` for an explicit login after the server publishes valid OAuth metadata. Do not put a bearer token in this repository or in plugin configuration.
+Use Codex's supported MCP OAuth login flow when the service requests authorization. The plugin's
+`open-canvas` skill starts `codex mcp login sneeai`, opens the returned authorization URL, waits for
+the local callback, and retries the canvas connection. Do not put a bearer token in this repository
+or in plugin configuration.
 
 The plugin keeps the existing SneeAI tool names and protocol-major compatibility contract. Additive response fields are safe; removing a tool or narrowing its arguments requires a protocol-major change.
 

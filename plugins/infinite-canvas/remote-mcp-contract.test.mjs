@@ -60,6 +60,17 @@ test("keeps the existing canvas tool contract visible to the plugin", async () =
   }
 });
 
+test("automates the first remote MCP authorization instead of handing a command to the user", async () => {
+  const skill = await read("skills/open-canvas/SKILL.md");
+
+  assert.match(skill, /codex mcp login sneeai/);
+  assert.match(skill, /authorization URL|授权地址/i);
+  assert.match(skill, /open|打开.*授权/i);
+  assert.match(skill, /wait|等待.*回调/i);
+  assert.match(skill, /retry|重试.*canvas|重试.*画布/i);
+  assert.doesNotMatch(skill, /(?:让|要求|请)用户(?:手动)?运行\s*`?codex mcp login sneeai/i);
+});
+
 test("documents OAuth ownership and cross-user isolation", async () => {
   const [readme, skill, protocol, development] = await Promise.all([
     read("README.md"),

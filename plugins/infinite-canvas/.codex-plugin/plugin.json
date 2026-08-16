@@ -1,6 +1,6 @@
 {
   "name": "sneeai",
-  "version": "0.1.0+codex.20260816100608",
+  "version": "0.1.0+codex.20260816123652",
   "description": "Connect Codex to the SneeAI remote MCP service with user-scoped OAuth.",
   "author": {
     "name": "SneeAI",
