@@ -116,7 +116,6 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     let mcpLastSeenAt: number | null = null;
     let pluginVersion: string | null = null;
     let mcpActiveBinding: string | null = null;
-    const MCP_LAST_SEEN_TTL_MS = 120_000;
     const rememberProfile = (profile: AgentProfile) => {
         knownProfiles.set(profile.key, profile);
         return profile;
@@ -278,9 +277,6 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     app.get("/health", route(async (_req, res) => {
         const diagnostics = sessions.health();
         const network = await resolveExternalNetworkDiagnostics("https://sneeai.com/agent-release.json");
-        const recentMcpLastSeenAt = mcpLastSeenAt !== null && now() >= mcpLastSeenAt && now() - mcpLastSeenAt <= MCP_LAST_SEEN_TTL_MS
-            ? mcpLastSeenAt
-            : null;
         res.json({
             ...diagnostics,
             ...protocolMetadata(VERSION, BUILD_ID),
@@ -288,10 +284,10 @@ export function startHttpServer(options: HttpServerOptions = {}) {
             version: VERSION,
             agentOnline: true,
             sitePaired: diagnostics.clients > 0,
-            pluginInstalled: recentMcpLastSeenAt !== null,
-            pluginVersion: recentMcpLastSeenAt !== null ? pluginVersion : null,
-            mcpActiveCanvas: recentMcpLastSeenAt !== null && mcpActiveBinding !== null && mcpActiveBinding === sessions.activeBindingKey(),
-            mcpLastSeenAt: recentMcpLastSeenAt,
+            pluginInstalled: mcpLastSeenAt !== null,
+            pluginVersion,
+            mcpActiveCanvas: mcpLastSeenAt !== null && mcpActiveBinding !== null && mcpActiveBinding === sessions.activeBindingKey(),
+            mcpLastSeenAt,
             proxyMode: network.proxyMode,
             proxyDiagnosticCode: network.diagnosticCode || null,
             diagnostics,

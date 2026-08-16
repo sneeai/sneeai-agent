@@ -142,6 +142,32 @@ test("website entitlement remains fail-closed across the local HTTP Agent lifecy
     assert.match(agentVersion, /^\d+\.\d+\.\d+/);
     authority.instanceKey = instanceKey;
 
+    await t.test("plugin detection remains installed after an idle period", async () => {
+        const persistentToken = readAgentConfig(home).token;
+        const pluginCall = await fetch(`${agentUrl}/api/tools`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "x-canvas-agent-token": persistentToken,
+                "x-canvas-agent-protocol-version": "1",
+                "x-canvas-agent-capabilities": "mcp.tools.v1,tool.authorization.v1",
+                "x-canvas-plugin-version": "0.1.0-test",
+            },
+            body: JSON.stringify({ name: "canvas_get_state", input: {} }),
+        });
+        assert.equal(pluginCall.status, 409);
+        const detected = await fetch(`${agentUrl}/health`).then(jsonBody);
+        const lastSeenAt = Number(detected.mcpLastSeenAt);
+        assert.equal(detected.pluginInstalled, true);
+        assert.equal(detected.pluginVersion, "0.1.0-test");
+
+        clock.advance(120_001);
+        const idle = await fetch(`${agentUrl}/health`).then(jsonBody);
+        assert.equal(idle.pluginInstalled, true);
+        assert.equal(idle.pluginVersion, "0.1.0-test");
+        assert.equal(idle.mcpLastSeenAt, lastSeenAt);
+    });
+
     await t.test("pairing proof and entitlement stay bound to the Agent instance seen in config", async () => {
         const binding = ticketInput("identity-user", "identity-client", deviceId, agentVersion);
         const challenge = authority.issuePairingChallenge({ ...binding, instanceKey });
