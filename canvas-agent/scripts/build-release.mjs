@@ -123,6 +123,10 @@ export function npmPackArguments(codexPackageVersion, destination) {
     ];
 }
 
+export function npmCommand(platform = process.platform) {
+    return platform === "win32" ? "npm.cmd" : "npm";
+}
+
 export function archiveInvocation(specification, stage, bundle, archive, memberList, archiveCommand = "tar") {
     const commonEnvironment = { COPYFILE_DISABLE: "1", TZ: "UTC" };
     const commonArguments = [
@@ -360,7 +364,7 @@ async function buildTarget({ plan, specification, instructions, releaseStage, co
 async function unpackCodexPackage(specification, stage, environment) {
     const packageDirectory = path.join(stage, "codex-package");
     await mkdir(packageDirectory);
-    const stdout = await capture("npm", npmPackArguments(specification.codexPackageVersion, packageDirectory), {
+    const stdout = await capture(npmCommand(), npmPackArguments(specification.codexPackageVersion, packageDirectory), {
         cwd: root,
         environment: { ...environment, npm_config_audit: "false", npm_config_fund: "false", npm_config_offline: "true", npm_config_update_notifier: "false" },
     });

@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { archiveInvocation, bunBuildEnvironment, bunCompilerCacheTarget, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
+import { archiveInvocation, bunBuildEnvironment, bunCompilerCacheTarget, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmCommand, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -65,6 +65,10 @@ test("release metadata uses one validated Agent and Codex version", () => {
 });
 
 test("release commands require offline Codex packages and metadata-clean archives", () => {
+    assert.equal(npmCommand("win32"), "npm.cmd");
+    assert.equal(npmCommand("darwin"), "npm");
+    assert.equal(npmCommand("linux"), "npm");
+
     const destination = "/tmp/codex-package";
     const npmArgs = npmPackArguments("0.145.0-win32-x64", destination);
     assert.deepEqual(npmArgs, [
