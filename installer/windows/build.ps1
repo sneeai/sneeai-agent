@@ -17,6 +17,12 @@ function Require-Command([string]$Name) {
     return $command.Source
 }
 
+function Require-InnoCompiler() {
+    $command = Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue
+    if (-not $command) { throw 'Inno Setup 6 is required.' }
+    return $command.Source
+}
+
 $scriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $payload = (Resolve-Path -LiteralPath $PayloadDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $payload 'sneeai-agent.exe') -PathType Leaf)) {
@@ -25,9 +31,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $payload 'sneeai-agent.exe') -PathTy
 $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
-$inno = Require-Command 'ISCC.exe'
-$innoVersion = (Get-Item -LiteralPath $inno).VersionInfo.ProductVersion
-if ($innoVersion -notmatch '^6\.') { throw "Inno Setup 6 is required; found $innoVersion" }
+$inno = Require-InnoCompiler
 $compiler = Require-Command 'cl.exe'
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("sneeai-agent-installer-" + [guid]::NewGuid())
