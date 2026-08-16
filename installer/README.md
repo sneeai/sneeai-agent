@@ -1,6 +1,6 @@
 # Agent installer delivery
 
-This directory defines the installer handoff without pretending that an MSI or PKG already exists. The current release builder continues to produce reproducible ZIP/TAR compatibility archives. `canvas-agent/release/manifest.json` now also records the expected installer target, its lifecycle mode, and every unresolved signing or platform-validation blocker.
+This directory defines the installer handoff without pretending that an EXE or PKG already exists. The current release builder continues to produce reproducible ZIP/TAR compatibility archives. `canvas-agent/release/manifest.json` now also records the expected installer target, its lifecycle mode, and every unresolved signing or platform-validation blocker.
 
 Validate a release manifest with:
 
@@ -12,7 +12,7 @@ Use `--require-ready` in a release gate. It exits with status `2` until every in
 
 ## Required user experience
 
-- Windows delivers a per-user, code-signed MSI (or a reviewed replacement installer if the product owner approves that change).
+- Windows delivers a per-user, code-signed EXE installer.
 - macOS delivers a per-user, Developer ID signed and notarized PKG.
 - The Agent runs in the signed-in user's session, starts at login, stays in the background, and does not require an open terminal.
 - The Codex plugin remains a separate user-installed component. The Agent installer must not silently install or modify Codex plugins.
@@ -21,7 +21,7 @@ Use `--require-ready` in a release gate. It exits with status `2` until every in
 
 ## Build boundary
 
-The repository contains a dependency-free handoff for WiX v4 on Windows and the platform-provided `pkgbuild`/`productbuild` tools on macOS. Build scripts never download a toolchain or embed credentials. They fail closed unless the required host tools and signing parameters are supplied; an explicit local-test flag is required to create an unsigned artifact. See [Windows](windows/README.md), [macOS](macos/README.md), and [release policy](../docs/AGENT_RELEASE.md).
+The repository contains an Inno Setup 6 handoff on Windows and the platform-provided `pkgbuild`/`productbuild` tools on macOS. Build scripts never download a toolchain or embed credentials. They fail closed unless the required host tools and signing parameters are supplied; an explicit local-test flag is required to create an unsigned artifact. See [Windows](windows/README.md), [macOS](macos/README.md), and [release policy](../docs/AGENT_RELEASE.md).
 
 Build entry points:
 

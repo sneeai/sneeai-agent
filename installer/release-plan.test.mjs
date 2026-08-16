@@ -19,7 +19,7 @@ test("installer delivery is explicit about unavailable unsigned artifacts", () =
     const delivery = createInstallerDelivery(plan, artifacts);
     assert.equal(delivery.compatibilityArchives, "available");
     assert.equal(delivery.preferredUserDelivery, "installer");
-    assert.equal(delivery.installers[0].expectedArtifact, "sneeai-agent-0.3.5-windows-x64.msi");
+    assert.equal(delivery.installers[0].expectedArtifact, "sneeai-agent-0.3.5-windows-x64.exe");
     assert.equal(delivery.installers[0].status, "not_built");
     assert.equal(delivery.installers[0].signature.status, "not_performed");
     assert.equal(delivery.installers[0].notarization.status, "not_applicable");

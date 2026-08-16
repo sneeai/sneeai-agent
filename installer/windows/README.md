@@ -1,10 +1,10 @@
 # Windows installer contract
 
-Expected artifact: `sneeai-agent-<version>-windows-x64.msi`.
+Expected artifact: `sneeai-agent-<version>-windows-x64.exe`.
 
-The installer must be built and tested on Windows. The current macOS/Linux development environment cannot certify MSI behavior, Authenticode signing, Windows Defender reputation, or per-user startup behavior.
+The installer must be built and tested on Windows. The current macOS/Linux development environment cannot certify installer behavior, Authenticode signing, Windows Defender reputation, or per-user startup behavior.
 
-Build from a Visual Studio Developer PowerShell with an already-installed WiX v4 CLI:
+Build from a Visual Studio Developer PowerShell with Inno Setup 6 installed:
 
 ```powershell
 .\installer\windows\build.ps1 `
@@ -13,7 +13,7 @@ Build from a Visual Studio Developer PowerShell with an already-installed WiX v4
   -OutputDirectory .\release
 ```
 
-Set `SNEEAI_WINDOWS_SIGNING_THUMBPRINT` to a certificate in the protected Windows certificate store. The script does not install WiX, download certificates, or accept a certificate password. `-AllowUnsigned` exists only for local MSI lifecycle tests and always emits `publishable: false` evidence.
+Set `SNEEAI_WINDOWS_SIGNING_THUMBPRINT` to a certificate in the protected Windows certificate store. The script does not install Inno Setup, download certificates, or accept a certificate password. `-AllowUnsigned` exists only for test installer builds and always emits `publishable: false` evidence.
 
 ## Installation lifecycle
 
@@ -31,7 +31,7 @@ Set `SNEEAI_WINDOWS_SIGNING_THUMBPRINT` to a certificate in the protected Window
 
 Before `status` can become `published`, the release job must verify:
 
-1. The MSI product/upgrade identifiers and upgrade rules were reviewed.
+1. The installer application identifier and upgrade rules were reviewed.
 2. The package and contained executables have valid Authenticode signatures.
 3. The SHA-256 digest in the public release manifest matches the uploaded file.
 4. Clean Windows 11 install, repair, upgrade, uninstall, reboot, port-conflict, and standard-user tests pass.

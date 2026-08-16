@@ -23,7 +23,7 @@ test("release and extension documentation entry points exist", async () => {
         "docs/AGENT_PROTOCOL.md",
         "docs/PLUGIN_DEVELOPMENT.md",
         "plugin-bridge/README.md",
-        "installer/windows/Package.wxs",
+        "installer/windows/SneeAIAgent.iss",
         "installer/windows/launcher.c",
         "installer/windows/build.ps1",
         "installer/macos/Distribution.xml.in",
@@ -42,18 +42,17 @@ test("release and extension documentation entry points exist", async () => {
 });
 
 test("Windows installer source is per-user, background, and fail-closed for signing", async () => {
-    const wix = await readFile(path.join(root, "installer/windows/Package.wxs"), "utf8");
+    const inno = await readFile(path.join(root, "installer/windows/SneeAIAgent.iss"), "utf8");
     const launcher = await readFile(path.join(root, "installer/windows/launcher.c"), "utf8");
     const build = await readFile(path.join(root, "installer/windows/build.ps1"), "utf8");
-    assert.match(wix, /Scope="perUser"/);
-    assert.match(wix, /CurrentVersion\\Run/);
-    assert.match(wix, /MajorUpgrade/);
-    assert.match(wix, /StopRunningAgent/);
-    assert.match(wix, /StartInstalledAgent/);
+    assert.match(inno, /PrivilegesRequired=lowest/);
+    assert.match(inno, /Software\\Microsoft\\Windows\\CurrentVersion\\Run/);
+    assert.match(inno, /PrepareToInstall/);
+    assert.match(inno, /sneeai-agent-launcher\.exe/);
     assert.match(launcher, /CREATE_NO_WINDOW/);
     assert.match(launcher, /QueryFullProcessImageNameW/);
-    assert.match(build, /WiX v4 is required/);
-    assert.match(build, /-AllowUnsigned only for local installer testing/);
+    assert.match(build, /Inno Setup 6 is required/);
+    assert.match(build, /-AllowUnsigned only for test installer builds/);
     assert.match(build, /publishable = \$false/);
     assert.doesNotMatch(build, /password|secret/i);
 });

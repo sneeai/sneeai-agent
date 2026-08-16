@@ -14,7 +14,7 @@ The Agent stores non-secret local configuration in `~/.sneeai-agent/sneeai-agent
 
 External Agent requests honor an explicit Agent proxy, a concrete Windows/macOS system PAC URL or manual system proxy, standard proxy environment variables, then direct access. WPAD without a concrete PAC URL is reported as unsupported. Loopback traffic always bypasses proxies.
 
-`npm run build:release` currently creates reproducible ZIP/TAR compatibility archives plus SHA-256 files and a release manifest. It does not create, sign, or notarize an end-user installer. The manifest records the expected MSI/PKG targets as `not_built` so a release channel cannot mistake an archive for an installer. See [installer/README.md](../installer/README.md).
+`npm run build:release` currently creates reproducible ZIP/TAR compatibility archives plus SHA-256 files and a release manifest. It does not create, sign, or notarize an end-user installer. The manifest records the expected EXE/PKG targets as `not_built` so a release channel cannot mistake an archive for an installer. See [installer/README.md](../installer/README.md).
 
 ## Website pairing
 

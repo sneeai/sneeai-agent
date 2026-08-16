@@ -4,16 +4,16 @@
 
 The release system has two deliberately separate channels:
 
-- **Installer channel:** the intended end-user delivery. Windows uses a signed per-user MSI; macOS uses signed and notarized per-user PKGs.
+- **Installer channel:** the intended end-user delivery. Windows uses a signed per-user EXE; macOS uses signed and notarized per-user PKGs.
 - **Compatibility archive channel:** reproducible ZIP/TAR artifacts for development, recovery, and installer input. An archive is not a one-click installer and must not be advertised as one.
 
 `canvas-agent/scripts/build-release.mjs` produces compatibility archives, SHA-256 files, and `manifest.json`. The manifest includes an installer delivery plan with `status: not_built` until a target-specific builder, signing job, and clean-device gate exist. This status is factual release metadata, not a promise that the expected installer file is present.
 
-The compatibility archive publisher does not own or delete MSI/PKG files. Installer artifacts are published only by the separate signed installer gate, preventing a routine archive rebuild from removing or replacing a verified installer. A ZIP or TAR file cannot satisfy that gate, even if it is renamed with an `.msi` or `.pkg` extension.
+The compatibility archive publisher does not own or delete EXE/PKG files. Installer artifacts are published only by the separate signed installer gate, preventing a routine archive rebuild from removing or replacing a verified installer. A ZIP or TAR file cannot satisfy that gate, even if it is renamed with an `.exe` or `.pkg` extension.
 
 The installer gate may change an entry to `published` only when all of the following are true:
 
-- the expected MSI/PKG and its checksum file exist in the release directory;
+- the expected EXE/PKG and its checksum file exist in the release directory;
 - the artifact's computed SHA-256 matches the checksum file, installer metadata, and build evidence;
 - evidence target, Agent version, release ID, source archive, source archive digest, and artifact name match the release manifest;
 - `publishable` is `true`, `status` is `published`, and `blockers` is empty;
@@ -25,7 +25,7 @@ The build scripts always emit `publishable: false`. Building or locally verifyin
 
 ## Build evidence contract
 
-Each MSI/PKG is accompanied by `<artifact>.sha256` and `<artifact>.build.json`. Build evidence uses schema version 1 and records, at minimum:
+Each EXE/PKG is accompanied by `<artifact>.sha256` and `<artifact>.build.json`. Build evidence uses schema version 1 and records, at minimum:
 
 ```json
 {
@@ -72,7 +72,7 @@ Release jobs must not embed website tickets, Agent tokens, provider credentials,
 
 ## Current blocker
 
-This repository contains installer source and fail-closed build interfaces, but no signed output or production signing infrastructure. Windows MSI construction cannot be executed on this macOS workspace, and macOS publication still requires real Developer ID identities, notarization credentials, and clean-device tests. Validate the manifest structure with:
+This repository contains installer source and fail-closed build interfaces, but no signed output or production signing infrastructure. Windows EXE construction cannot be executed on this macOS workspace, and macOS publication still requires real Developer ID identities, notarization credentials, and clean-device tests. Validate the manifest structure with:
 
 ```bash
 node installer/release-plan.mjs --manifest canvas-agent/release/manifest.json --require-ready

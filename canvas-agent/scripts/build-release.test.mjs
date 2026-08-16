@@ -285,7 +285,7 @@ test("publishing replaces only managed release files", async (t) => {
     if (process.platform !== "win32") assert.equal((await stat(output)).mode & 0o777, 0o755);
     await assert.rejects(readFile(path.join(output, "sneeai-agent-0.3.3-windows-x64.zip")), /ENOENT/);
     assert.equal(isManagedReleaseFile("manifest.json"), true);
-    assert.equal(isManagedReleaseFile("sneeai-agent-0.3.4-windows-x64.msi"), false);
+    assert.equal(isManagedReleaseFile("sneeai-agent-0.3.4-windows-x64.exe"), false);
     assert.equal(isManagedReleaseFile("sneeai-agent-0.3.4-macos-arm64.pkg.sha256"), false);
     assert.equal(isManagedReleaseFile("notes.txt"), false);
 });

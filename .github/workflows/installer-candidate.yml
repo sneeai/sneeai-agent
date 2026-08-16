@@ -44,17 +44,11 @@ jobs:
           SNEEAI_AGENT_BUILD_ID: ${{ github.sha }}
         run: npm run build:release -- windows-x64
 
-      - name: Install WiX 4
+      - name: Install pinned Inno Setup
         shell: pwsh
-        run: |
-          dotnet tool install --global wix --version 4.0.6
-          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
-          wix extension add WixToolset.Heat.wixext --version 4.0.6
-          if ($LASTEXITCODE -ne 0) { throw 'WiX Heat extension installation failed.' }
-          wix extension list
-          wix.exe --version
+        run: choco install innosetup --version=6.6.1 --yes --no-progress
 
-      - name: Build unsigned Windows MSI candidate
+      - name: Build unsigned Windows EXE candidate
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -78,7 +72,7 @@ jobs:
         shell: pwsh
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'sneeai-agent-installer-candidate'
-          $artifact = Join-Path $output 'sneeai-agent-0.3.5-windows-x64.msi'
+          $artifact = Join-Path $output 'sneeai-agent-0.3.5-windows-x64.exe'
           $evidence = Get-Content -Raw -LiteralPath "$artifact.build.json" | ConvertFrom-Json
           if ($evidence.status -ne 'built_unsigned_local_test' -or $evidence.publishable -ne $false) {
             throw 'Windows candidate evidence does not identify an unsigned test build.'
