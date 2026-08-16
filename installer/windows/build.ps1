@@ -53,7 +53,7 @@ try {
 
     $artifactName = "sneeai-agent-$AgentVersion-windows-x64.msi"
     $artifact = Join-Path $output $artifactName
-    & $wix build (Join-Path $scriptDirectory 'Package.wxs') -arch x64 -ext WixToolset.Heat.wixext -d "AgentVersion=$AgentVersion" -d "PayloadDir=$stagedPayload" -d "LauncherPath=$launcher" -o $artifact
+    & $wix build (Join-Path $scriptDirectory 'Package.wxs') -arch x64 -ext WixToolset.Heat -d "AgentVersion=$AgentVersion" -d "PayloadDir=$stagedPayload" -d "LauncherPath=$launcher" -o $artifact
     if ($LASTEXITCODE -ne 0) { throw "WiX build failed with exit code $LASTEXITCODE" }
     if ($signed) {
         & $signTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimestampUrl /td SHA256 $artifact
