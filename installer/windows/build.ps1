@@ -26,8 +26,8 @@ $output = [System.IO.Path]::GetFullPath($OutputDirectory)
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
 $inno = Require-Command 'ISCC.exe'
-$innoVersion = (& $inno /?).Trim()
-if ($innoVersion -notmatch 'Inno Setup 6') { throw 'Inno Setup 6 is required.' }
+$innoVersion = (Get-Item -LiteralPath $inno).VersionInfo.ProductVersion
+if ($innoVersion -notmatch '^6\.') { throw "Inno Setup 6 is required; found $innoVersion" }
 $compiler = Require-Command 'cl.exe'
 
 $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("sneeai-agent-installer-" + [guid]::NewGuid())
