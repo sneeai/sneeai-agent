@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { archiveInvocation, bunBuildEnvironment, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
+import { archiveInvocation, bunBuildEnvironment, bunCompilerCacheTarget, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -97,6 +97,12 @@ test("release commands require offline Codex packages and metadata-clean archive
     assert.equal(buildEnvironment.SNEEAI_AGENT_INSTRUCTIONS, "agent prompt");
     assert.equal(buildEnvironment.SNEEAI_AGENT_PACKAGE_JSON, '{"version":"0.3.4"}');
     assert.equal(buildEnvironment.SNEEAI_AGENT_BUILD_ID, "build-abc123");
+});
+
+test("offline Bun compiler cache uses Bun's macOS arm64 filename", () => {
+    assert.equal(bunCompilerCacheTarget("bun-darwin-arm64"), "bun-darwin-aarch64");
+    assert.equal(bunCompilerCacheTarget("bun-darwin-x64"), "bun-darwin-x64");
+    assert.equal(bunCompilerCacheTarget("bun-windows-x64"), "bun-windows-x64");
 });
 
 test("tar.gz and zip archives are byte-reproducible with normalized permissions and no Apple metadata", async (t) => {

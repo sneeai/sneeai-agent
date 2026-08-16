@@ -389,13 +389,17 @@ async function resolveBunCompilerPath(specification, bunVersion, environment) {
     if (specification.bunTarget === hostBunTarget()) return undefined;
     if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(bunVersion)) throw new Error(`Unexpected Bun version: ${bunVersion}`);
     const bunInstall = environment.BUN_INSTALL?.trim() || path.join(os.homedir(), ".bun");
-    const compilerPath = path.join(bunInstall, "install", "cache", `${specification.bunTarget}-v${bunVersion}`);
+    const compilerPath = path.join(bunInstall, "install", "cache", `${bunCompilerCacheTarget(specification.bunTarget)}-v${bunVersion}`);
     try {
         await access(compilerPath, fsConstants.X_OK);
     } catch {
         throw new Error(`Offline Bun compiler is missing for ${specification.target}: ${compilerPath}`);
     }
     return compilerPath;
+}
+
+export function bunCompilerCacheTarget(bunTarget) {
+    return bunTarget === "bun-darwin-arm64" ? "bun-darwin-aarch64" : bunTarget;
 }
 
 function hostTarget() {
