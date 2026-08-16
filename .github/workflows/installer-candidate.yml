@@ -48,7 +48,10 @@ jobs:
         shell: pwsh
         run: |
           dotnet tool install --global wix --version 4.0.6
-          wix extension add WixToolset.Heat --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          wix extension add WixToolset.Heat.wixext --version 4.0.6
+          if ($LASTEXITCODE -ne 0) { throw 'WiX Heat extension installation failed.' }
+          wix extension list
           wix.exe --version
 
       - name: Build unsigned Windows MSI candidate
