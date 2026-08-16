@@ -127,6 +127,11 @@ export function npmCommand(platform = process.platform) {
     return platform === "win32" ? "npm.cmd" : "npm";
 }
 
+export function npmInvocation(args, { platform = process.platform, nodePath = process.execPath, npmExecPath = process.env.npm_execpath } = {}) {
+    if (platform === "win32" && npmExecPath) return { command: nodePath, args: [npmExecPath, ...args] };
+    return { command: npmCommand(platform), args };
+}
+
 export function archiveInvocation(specification, stage, bundle, archive, memberList, archiveCommand = "tar") {
     const commonEnvironment = { COPYFILE_DISABLE: "1", TZ: "UTC" };
     const commonArguments = [
@@ -364,7 +369,8 @@ async function buildTarget({ plan, specification, instructions, releaseStage, co
 async function unpackCodexPackage(specification, stage, environment) {
     const packageDirectory = path.join(stage, "codex-package");
     await mkdir(packageDirectory);
-    const stdout = await capture(npmCommand(), npmPackArguments(specification.codexPackageVersion, packageDirectory), {
+    const npm = npmInvocation(npmPackArguments(specification.codexPackageVersion, packageDirectory));
+    const stdout = await capture(npm.command, npm.args, {
         cwd: root,
         environment: { ...environment, npm_config_audit: "false", npm_config_fund: "false", npm_config_offline: "true", npm_config_update_notifier: "false" },
     });

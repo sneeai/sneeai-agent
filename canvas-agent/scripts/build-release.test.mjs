@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { archiveInvocation, bunBuildEnvironment, bunCompilerCacheTarget, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmCommand, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
+import { archiveInvocation, bunBuildEnvironment, bunCompilerCacheTarget, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmCommand, npmInvocation, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -68,6 +68,14 @@ test("release commands require offline Codex packages and metadata-clean archive
     assert.equal(npmCommand("win32"), "npm.cmd");
     assert.equal(npmCommand("darwin"), "npm");
     assert.equal(npmCommand("linux"), "npm");
+    assert.deepEqual(npmInvocation(["pack"], { platform: "win32", nodePath: "node.exe", npmExecPath: "C:\\nodejs\\npm-cli.js" }), {
+        command: "node.exe",
+        args: ["C:\\nodejs\\npm-cli.js", "pack"],
+    });
+    assert.deepEqual(npmInvocation(["pack"], { platform: "win32", nodePath: "node.exe", npmExecPath: "" }), {
+        command: "npm.cmd",
+        args: ["pack"],
+    });
 
     const destination = "/tmp/codex-package";
     const npmArgs = npmPackArguments("0.145.0-win32-x64", destination);
