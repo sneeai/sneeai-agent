@@ -1,0 +1,78 @@
+name: Agent installer candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install pinned Agent dependencies
+        working-directory: canvas-agent
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Build Windows compatibility payload
+        working-directory: canvas-agent
+        env:
+          SNEEAI_AGENT_BUILD_ID: ${{ github.sha }}
+        run: npm run build:release -- windows-x64
+
+      - name: Install WiX 4
+        shell: pwsh
+        run: |
+          dotnet tool install --global wix --version 4.0.6
+          wix.exe --version
+
+      - name: Build unsigned Windows MSI candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) { throw 'Visual Studio C++ build tools were not found.' }
+          Import-Module (Join-Path $vsPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+
+          $payloadRoot = Join-Path $env:RUNNER_TEMP 'sneeai-agent-payload'
+          Expand-Archive -LiteralPath 'canvas-agent\release\sneeai-agent-0.3.5-windows-x64.zip' -DestinationPath $payloadRoot
+          $payload = Join-Path $payloadRoot 'sneeai-agent-0.3.5-windows-x64'
+          $output = Join-Path $env:RUNNER_TEMP 'sneeai-agent-installer-candidate'
+          .\installer\windows\build.ps1 `
+            -AgentVersion '0.3.5' `
+            -PayloadDirectory $payload `
+            -OutputDirectory $output `
+            -AllowUnsigned
+
+      - name: Verify candidate identity and checksum
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'sneeai-agent-installer-candidate'
+          $artifact = Join-Path $output 'sneeai-agent-0.3.5-windows-x64.msi'
+          $evidence = Get-Content -Raw -LiteralPath "$artifact.build.json" | ConvertFrom-Json
+          if ($evidence.status -ne 'built_unsigned_local_test' -or $evidence.publishable -ne $false) {
+            throw 'Windows candidate evidence does not identify an unsigned test build.'
+          }
+          $expected = (Get-Content -Raw -LiteralPath "$artifact.sha256").Split(' ')[0].Trim()
+          $actual = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw 'Windows candidate checksum does not match.' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sneeai-agent-windows-x64-candidate
+          path: ${{ runner.temp }}/sneeai-agent-installer-candidate/*
+          if-no-files-found: error
+          retention-days: 3
