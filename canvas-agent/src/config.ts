@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { createCredentialStore, CredentialStoreError, isCredentialReference, type CredentialReference, type CredentialStore } from "./credential-store.js";
+
 export const DEFAULT_PORT = 17371;
+export const FALLBACK_PORTS = Object.freeze(Array.from({ length: 8 }, (_, index) => DEFAULT_PORT + index + 1));
 export const AGENT_SERVICE = "sneeai-agent";
 export const STABLE_USER_HOME = path.resolve(process.env.CANVAS_AGENT_HOME?.trim() || os.userInfo().homedir);
 export const CONFIG_DIR = path.join(STABLE_USER_HOME, ".sneeai-agent");
@@ -23,6 +26,7 @@ export type CanvasAgentProfileConfig = { workspace?: SiteWorkspaceConfig };
 export type CanvasAgentConfig = {
     url: string;
     token: string;
+    credential?: CredentialReference;
     deviceId?: string;
     origins?: string[];
     workspace?: SiteWorkspaceConfig;
@@ -30,10 +34,22 @@ export type CanvasAgentConfig = {
     codex?: { mode?: CanvasCodexMode };
 };
 
+type ConfigOptions = { credentialStore?: CredentialStore };
+
+/** Insecure plaintext credentials are available only to source-tree tests. */
+export function allowInsecureTestCredentials(
+    environment: NodeJS.ProcessEnv = process.env,
+    buildId = BUILD_ID,
+    execArguments: readonly string[] = process.execArgv,
+) {
+    const runningThroughTsx = execArguments.some((argument, index) => argument === "tsx" || argument.endsWith("/tsx") || (argument === "--import" && execArguments[index + 1]?.includes("tsx")));
+    return buildId === "source" && runningThroughTsx && environment.NODE_ENV === "test" && environment.SNEEAI_AGENT_DISABLE_SECURE_CREDENTIALS === "1";
+}
+
 /** 读取本地 Sneeai Agent 配置，不存在时生成默认配置。 */
-export function loadConfig(create = false): CanvasAgentConfig {
+export function loadConfig(create = false, options: ConfigOptions = {}): CanvasAgentConfig {
     try {
-        const config = readConfig();
+        const config = readConfig(options.credentialStore);
         const needsUrlMigration = config.url === "local";
         if (needsUrlMigration) config.url = effectiveCanvasAgentUrl(config.url);
         const needsDeviceId = !config.deviceId;
@@ -81,7 +97,7 @@ function createConfig(config: CanvasAgentConfig) {
     }
 }
 
-function readConfig() {
+function readConfig(credentialStore?: CredentialStore) {
     let parsed: unknown;
     try {
         parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
@@ -89,20 +105,30 @@ function readConfig() {
         if (isFileMissing(error)) throw error;
         throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`, { cause: error });
     }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || typeof (parsed as CanvasAgentConfig).url !== "string" || typeof (parsed as CanvasAgentConfig).token !== "string" || !(parsed as CanvasAgentConfig).token) {
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || typeof (parsed as CanvasAgentConfig).url !== "string") {
         throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`);
     }
     const config = parsed as CanvasAgentConfig;
+    if (isCredentialReference(config.credential)) {
+        try {
+            config.token = (credentialStore || createCredentialStore()).read(config.credential);
+        } catch (error) {
+            const code = error instanceof CredentialStoreError ? error.code : "credential_store_read_failed";
+            throw new Error(`Sneeai Agent 无法读取当前系统用户的 Connect token (${code})；请使用 doctor 查看 credential 诊断`, { cause: error });
+        }
+    } else if (config.credential !== undefined || typeof config.token !== "string" || !config.token) {
+        throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`);
+    }
     if (config.url !== "local") parseLoopbackAgentUrl(config.url);
     if (config.deviceId !== undefined && !DEVICE_ID_PATTERN.test(config.deviceId)) throw new Error(`Sneeai Agent 配置文件无效，请检查或删除 ${CONFIG_FILE}`);
     return config;
 }
 
-function readConfigWithRetry() {
+function readConfigWithRetry(credentialStore?: CredentialStore) {
     let lastError: unknown;
     for (let attempt = 0; attempt < 50; attempt++) {
         try {
-            return readConfig();
+            return readConfig(credentialStore);
         } catch (error) {
             lastError = error;
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
@@ -114,7 +140,10 @@ function readConfigWithRetry() {
 function writeConfigFile(file: string, config: CanvasAgentConfig) {
     const descriptor = fs.openSync(file, "wx", CONFIG_MODE);
     try {
-        fs.writeFileSync(descriptor, JSON.stringify(config, null, 2));
+        const persisted = config.credential
+            ? Object.fromEntries(Object.entries(config).filter(([key]) => key !== "token"))
+            : config;
+        fs.writeFileSync(descriptor, JSON.stringify(persisted, null, 2));
         fs.fsyncSync(descriptor);
     } finally {
         fs.closeSync(descriptor);
@@ -129,12 +158,123 @@ function defaultConfig(): CanvasAgentConfig {
     };
 }
 
+/**
+ * Ensures runtime credentials use the current user's operating-system store.
+ * Fresh Windows/macOS installs never persist a plaintext token; legacy config
+ * is migrated without rotating the existing token.
+ */
+export function ensureSecureConfig(credentialStore = createCredentialStore()) {
+    if (credentialStore.backend === "unsupported") return loadConfig(true, { credentialStore });
+    if (fs.existsSync(CONFIG_FILE)) {
+        const config = loadConfig(true, { credentialStore });
+        if (!config.credential) migrateConfigCredential(config, credentialStore);
+        return config;
+    }
+
+    const config = defaultConfig();
+    const reference = credentialStore.store(config.token);
+    config.credential = reference;
+    try {
+        const created = createSecureConfig(config, credentialStore);
+        if (created !== config) credentialStore.remove(reference);
+        return created;
+    } catch (error) {
+        try {
+            credentialStore.remove(reference);
+        } catch {
+            // Preserve the original configuration error. The unreferenced
+            // credential can still be removed by credential diagnostics.
+        }
+        throw error;
+    }
+}
+
+function createSecureConfig(config: CanvasAgentConfig, credentialStore: CredentialStore) {
+    ensureConfigDir();
+    const temporaryFile = configTemporaryFile();
+    try {
+        writeConfigFile(temporaryFile, config);
+        try {
+            fs.linkSync(temporaryFile, CONFIG_FILE);
+            return config;
+        } catch (error) {
+            if (!isFileExists(error)) throw error;
+            return readConfigWithRetry(credentialStore);
+        }
+    } finally {
+        fs.rmSync(temporaryFile, { force: true });
+    }
+}
+
 /** 将已验证的本机地址统一为 MCP/HTTP 桥接实际使用的 IPv4 回环地址。 */
 export function effectiveCanvasAgentUrl(value: string) {
     const configuredPort = validAgentPort(process.env.PORT);
     if (value === "local") return `http://127.0.0.1:${configuredPort || DEFAULT_PORT}`;
     const parsed = parseLoopbackAgentUrl(value);
     return `http://127.0.0.1:${configuredPort || validAgentPort(parsed.port) || DEFAULT_PORT}`;
+}
+
+/** Returns deterministic candidates: explicit/persisted port, default, then fixed fallbacks. */
+export function canvasAgentPortCandidates(config: Pick<CanvasAgentConfig, "url">, configuredPort = process.env.PORT) {
+    const explicit = validAgentPort(configuredPort);
+    const persisted = config.url === "local" ? 0 : validAgentPort(parseLoopbackAgentUrl(config.url).port);
+    return [...new Set([explicit, persisted, DEFAULT_PORT, ...FALLBACK_PORTS].filter(Boolean))];
+}
+
+/** Selects the first candidate not known to be occupied; listening remains the HTTP server's responsibility. */
+export function selectCanvasAgentPort(config: Pick<CanvasAgentConfig, "url">, occupiedPorts: ReadonlySet<number>, configuredPort = process.env.PORT) {
+    const selected = canvasAgentPortCandidates(config, configuredPort).find((port) => !occupiedPorts.has(port));
+    if (!selected) throw new Error(`Sneeai Agent 固定备用端口 ${DEFAULT_PORT}-${FALLBACK_PORTS.at(-1)} 全部被占用`);
+    return selected;
+}
+
+/** Persists a port only after the caller has successfully bound it. */
+export function persistCanvasAgentPort(config: CanvasAgentConfig, port: number) {
+    if (!validAgentPort(String(port))) throw new Error("Sneeai Agent 端口无效");
+    config.url = `http://127.0.0.1:${port}`;
+    saveConfig(config);
+    return config.url;
+}
+
+/** Moves the current plaintext token into the current-user secure store without changing it. */
+export function migrateConfigCredential(config: CanvasAgentConfig, credentialStore = createCredentialStore()) {
+    if (config.credential) return { migrated: false, backend: config.credential.backend };
+    const reference = credentialStore.store(config.token);
+    const previous = config.credential;
+    try {
+        config.credential = reference;
+        saveConfig(config);
+    } catch (error) {
+        config.credential = previous;
+        throw error;
+    }
+    return { migrated: true, backend: reference.backend };
+}
+
+/** Explicitly rotates the local token; callers must stop a running Agent first. */
+export function rotateConfigToken(config: CanvasAgentConfig, credentialStore = createCredentialStore()) {
+    const token = crypto.randomBytes(32).toString("base64url");
+    const reference = credentialStore.store(token);
+    const previous = { token: config.token, credential: config.credential };
+    try {
+        config.token = token;
+        config.credential = reference;
+        saveConfig(config);
+    } catch (error) {
+        config.token = previous.token;
+        config.credential = previous.credential;
+        throw error;
+    }
+    if (previous.credential?.backend === "macos-keychain") {
+        try {
+            credentialStore.remove(previous.credential);
+        } catch (error) {
+            // The new config is committed and is the only valid token. Surface
+            // cleanup failure so the orphaned keychain item can be removed.
+            throw new Error("Sneeai Agent token 已轮换，但旧 macOS Keychain 凭据清理失败", { cause: error });
+        }
+    }
+    return { rotated: true, backend: reference.backend, previousCredentialRemoved: Boolean(previous.credential) };
 }
 
 function parseLoopbackAgentUrl(value: string) {

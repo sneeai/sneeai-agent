@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-import { archiveInvocation, bunBuildEnvironment, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmPackArguments, prepareArchiveBundle, publishRelease } from "./build-release.mjs";
+import { archiveInvocation, bunBuildEnvironment, createReleaseManifest, createReleasePlan, isManagedReleaseFile, npmPackArguments, prepareArchiveBundle, publishRelease, sourceBuildId } from "./build-release.mjs";
 
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const execFileAsync = promisify(execFile);
@@ -190,7 +190,61 @@ test("manifest records build identity and every archive digest", () => {
             sizeBytes: 123,
             sha256: "a".repeat(64),
         }],
+        delivery: {
+            schemaVersion: 1,
+            compatibilityArchives: "available",
+            preferredUserDelivery: "installer",
+            installers: [{
+                target: "darwin-arm64",
+                platform: "macos",
+                arch: "arm64",
+                format: "pkg",
+                expectedArtifact: "sneeai-agent-0.3.4-macos-arm64.pkg",
+                sourceArchive: "sneeai-agent-0.3.4-macos-arm64.tar.gz",
+                status: "not_built",
+                backgroundMode: "user-launch-agent",
+                buildHost: "macos",
+                signature: {
+                    required: true,
+                    scheme: "Developer ID Installer",
+                    status: "not_performed",
+                },
+                notarization: {
+                    required: true,
+                    scheme: "Apple notarization",
+                    status: "not_performed",
+                },
+                blockers: [
+                    "The pkgbuild/productbuild source must pass clean-device lifecycle tests.",
+                    "A Developer ID Installer identity is required.",
+                    "Apple notarization credentials and stapling verification are required.",
+                    "Install, upgrade, rollback, and uninstall behavior must pass a clean Apple Silicon macOS test.",
+                ],
+            }],
+        },
     });
+});
+
+test("release identity changes when the installer delivery plan changes", async (t) => {
+    const fixture = await mkdtemp(path.join(PROJECT_ROOT, ".release-source-identity-test-"));
+    t.after(() => rm(fixture, { recursive: true, force: true }));
+    const agentRoot = path.join(fixture, "canvas-agent");
+    const installerRoot = path.join(fixture, "installer");
+    await mkdir(path.join(agentRoot, "src"), { recursive: true });
+    await mkdir(installerRoot);
+    await writeFile(path.join(agentRoot, "agent-instructions.md"), "instructions\n");
+    await writeFile(path.join(agentRoot, "package.json"), "{}\n");
+    await writeFile(path.join(agentRoot, "package-lock.json"), "{}\n");
+    await writeFile(path.join(agentRoot, "src", "index.ts"), "export {};\n");
+    await writeFile(path.join(installerRoot, "release-plan.mjs"), "export const gate = 1;\n");
+
+    const before = await sourceBuildId(agentRoot);
+    await writeFile(path.join(installerRoot, "release-plan.mjs"), "export const gate = 2;\n");
+    const after = await sourceBuildId(agentRoot);
+
+    assert.match(before, /^[a-f0-9]{40}$/);
+    assert.match(after, /^[a-f0-9]{40}$/);
+    assert.notEqual(after, before);
 });
 
 test("publishing replaces only managed release files", async (t) => {
@@ -213,6 +267,8 @@ test("publishing replaces only managed release files", async (t) => {
     if (process.platform !== "win32") assert.equal((await stat(output)).mode & 0o777, 0o755);
     await assert.rejects(readFile(path.join(output, "sneeai-agent-0.3.3-windows-x64.zip")), /ENOENT/);
     assert.equal(isManagedReleaseFile("manifest.json"), true);
+    assert.equal(isManagedReleaseFile("sneeai-agent-0.3.4-windows-x64.msi"), false);
+    assert.equal(isManagedReleaseFile("sneeai-agent-0.3.4-macos-arm64.pkg.sha256"), false);
     assert.equal(isManagedReleaseFile("notes.txt"), false);
 });
 

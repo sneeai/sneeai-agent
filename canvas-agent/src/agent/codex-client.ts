@@ -4,13 +4,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { STABLE_USER_HOME, VERSION } from "../config.js";
+import { loadConfig, STABLE_USER_HOME, VERSION } from "../config.js";
+import { createAgentTicket, INTERNAL_MCP_TICKET_TTL_MS } from "../pairing-ticket.js";
 import { logger } from "../utils/logger.js";
 import { redactSensitiveText } from "../utils/logger.js";
 import { field, type JsonRecord } from "../utils/value.js";
 import type { CodexNotificationParams, CodexPlanUpdate, CodexRequestMethod, CodexRequestParams, CodexRequestResult, CodexTurnInput } from "./codex-protocol.js";
 import { enforceCodexProviderPolicy } from "./codex-provider-policy.js";
-import { CANVAS_AGENT_PROFILE_ENV, canvasCodexAppServerArgs, NESTED_CANVAS_MCP_ENV } from "./codex-runtime.js";
+import { CANVAS_AGENT_INTERNAL_TICKET_ENV, canvasCodexAppServerArgs, NESTED_CANVAS_MCP_ENV } from "./codex-runtime.js";
 import type { AgentEmit, AgentPermissionMode } from "./types.js";
 
 type AgentEvent = JsonRecord & { type: string; usage?: unknown };
@@ -475,11 +476,21 @@ function canvasAgentMcpCommand() {
 
 /** 生成 Codex app-server 使用的 MCP 配置。 */
 export function codexConfig(permissionMode: AgentPermissionMode, profileId?: string) {
+    const internalTicket = profileId ? createAgentTicket(loadConfig(true).token, {
+        kind: "internal-mcp",
+        origin: "local-internal",
+        profileKey: profileId,
+        clientId: "nested-mcp",
+        ttlMs: INTERNAL_MCP_TICKET_TTL_MS,
+    }) : "";
     const nestedEnvironment = {
         [NESTED_CANVAS_MCP_ENV]: "1",
         CANVAS_AGENT_HOME: STABLE_USER_HOME,
+        ...(process.env.NODE_ENV === "test" && process.env.SNEEAI_AGENT_DISABLE_SECURE_CREDENTIALS === "1"
+            ? { NODE_ENV: "test", SNEEAI_AGENT_DISABLE_SECURE_CREDENTIALS: "1" }
+            : {}),
         ...(process.env.PORT ? { PORT: process.env.PORT } : {}),
-        ...(profileId ? { [CANVAS_AGENT_PROFILE_ENV]: profileId } : {}),
+        ...(internalTicket ? { [CANVAS_AGENT_INTERNAL_TICKET_ENV]: internalTicket } : {}),
     };
     return { model_reasoning_summary: "auto", ...(permissionMode === "automatic" ? { approvals_reviewer: "auto_review" } : {}), mcp_servers: { "sneeai-agent": { command: canvasAgentMcp.command, args: canvasAgentMcp.args, env: nestedEnvironment, default_tools_approval_mode: "approve", startup_timeout_sec: MCP_STARTUP_TIMEOUT_SEC, tool_timeout_sec: 90, required: true } } };
 }

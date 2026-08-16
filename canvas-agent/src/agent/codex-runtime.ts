@@ -13,6 +13,7 @@ type PluginCacheEntry = readonly [path: string, kind: "directory" | "file" | "sy
 type PluginCacheState = { state: "present"; entries: PluginCacheEntry[] } | { state: "missing" } | { state: "error"; code: string };
 
 export const NESTED_CANVAS_MCP_ENV = "CANVAS_AGENT_NESTED_MCP";
+export const CANVAS_AGENT_INTERNAL_TICKET_ENV = "CANVAS_AGENT_INTERNAL_MCP_TICKET";
 export { CANVAS_AGENT_PROFILE_ENV };
 export const KAPEAI_API_KEY_ENV = "CANVAS_AGENT_KAPEAI_API_KEY";
 

@@ -44,6 +44,12 @@ test("event tickets are one-time even before their expiry", () => {
     assert.equal(guard.consume(result.claims, 2_101), false);
 });
 
+test("internal MCP tickets are profile-scoped and use a distinct ticket kind", () => {
+    const ticket = createAgentTicket(secret, { kind: "internal-mcp", origin: "local-internal", profileKey: binding.profileKey, clientId: "nested-mcp", now: 2_000, ttlMs: 500 });
+    assert.equal(verifyAgentTicket(secret, ticket, { kind: "internal-mcp", origin: "local-internal", profileKey: binding.profileKey }, 2_100).ok, true);
+    assert.deepEqual(verifyAgentTicket(secret, ticket, { kind: "pairing", origin: "local-internal", profileKey: binding.profileKey }, 2_100), { ok: false, reason: "kind" });
+});
+
 test("local tickets preserve the signed website authorization lease", () => {
     const ticket = createAgentTicket(secret, { kind: "pairing", ...binding, authorization, now: 1_000, ttlMs: 500 });
     const result = verifyAgentTicket(secret, ticket, { kind: "pairing", ...binding }, 1_250);

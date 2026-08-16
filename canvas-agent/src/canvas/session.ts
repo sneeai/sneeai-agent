@@ -29,6 +29,8 @@ type PendingRequest = {
 };
 type TurnAttachment = { clientId: string; id: string; name: string; type: string; size: number; width: number; height: number; dataUrl: string };
 type PendingCodexApproval = { profileKey: string; clientId: string; threadId: string; turnId: string; claimed: boolean };
+type ToolCallOptions = { routing?: "bound" | "active"; operationId?: string };
+type CachedToolOperation = { fingerprint: string; promise: Promise<unknown>; expiresAt: number; settled: boolean };
 export type CodexState = { busy: boolean; threadId: string; turnId: string };
 export type CodexControlScope = { profileKey: string; clientId: string; threadId?: string; turnId?: string };
 export type CanvasClientAuthorization = {
@@ -82,6 +84,9 @@ export const READ_ONLY_TOOL_NAMES = Object.freeze([
 ]) as readonly ToolName[];
 const READ_ONLY_TOOLS = new Set<ToolName>(READ_ONLY_TOOL_NAMES);
 const TOOL_REQUEST_TIMEOUT_MS = 30_000;
+const TOOL_OPERATION_CACHE_TTL_MS = 10 * 60_000;
+const MAX_TOOL_OPERATION_CACHE = 256;
+const OPERATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export class CanvasToolDecisionError extends Error {
     constructor(readonly code: string, message: string, readonly statusCode = 409) {
@@ -97,6 +102,15 @@ export class CanvasCodexControlError extends Error {
     }
 }
 
+export class CanvasSessionRoutingError extends Error {
+    readonly statusCode = 409;
+
+    constructor(readonly code: "canvas_not_connected" | "canvas_binding_ambiguous" | "canvas_binding_expired", message: string) {
+        super(message);
+        this.name = "CanvasSessionRoutingError";
+    }
+}
+
 /** 管理网页画布连接、状态、附件和工具请求。 */
 export class CanvasSession {
     private clients = new Map<string, ClientConnection>();
@@ -106,6 +120,7 @@ export class CanvasSession {
     private canvasStates = new Map<string, CanvasSnapshot>();
     private turnAttachments = new Map<string, TurnAttachment>();
     private codexApprovals = new Map<string, PendingCodexApproval>();
+    private toolOperations = new Map<string, CachedToolOperation>();
     private activeClientId = "";
     private boundClientId = "";
     private focusSequence = 0;
@@ -133,6 +148,21 @@ export class CanvasSession {
         return { ok: true, hasCanvas: Boolean(this.canvasState), clients: this.clients.size, codexBusy: this.codexState.busy };
     }
 
+    /** 仅供 registry 校验本机 MCP 目标，不暴露给远程请求。 */
+    hasConnectedClient(clientId: string) {
+        return this.clients.has(clientId);
+    }
+
+    /** 返回当前真实建立 SSE 的网页客户端。 */
+    connectedClientIds() {
+        return [...this.clients.keys()];
+    }
+
+    /** 返回 session 内当前活动画布，用于 registry 路由验证。 */
+    activeCanvasClientId() {
+        return this.activeClientId;
+    }
+
     /** 返回 Codex 是否正在执行任务。 */
     get codexBusy() {
         return this.codexState.busy;
@@ -140,7 +170,7 @@ export class CanvasSession {
 
     /** 交接只允许在 turn 和线程管理 RPC 都空闲时发生。 */
     get runtimeBusy() {
-        return this.codexState.busy || this.codexOperations > 0;
+        return this.codexState.busy || this.codexOperations > 0 || this.pending.size > 0;
     }
 
     /** 标记一个可能启动或调用 app-server 的 HTTP 请求，并返回幂等释放函数。 */
@@ -258,6 +288,7 @@ export class CanvasSession {
         this.canvasStates.clear();
         this.turnAttachments.clear();
         this.codexApprovals.clear();
+        this.toolOperations.clear();
         this.codexOperations = 0;
         this.activeClientId = "";
         this.boundClientId = "";
@@ -356,25 +387,68 @@ export class CanvasSession {
     }
 
     /** 校验工具参数并将调用分派到当前目标网页。 */
-    async callTool(name: unknown, rawInput: unknown) {
+    callTool(name: unknown, rawInput: unknown, options: ToolCallOptions = {}) {
         if (!isToolName(name)) throw new Error(`未知工具：${String(name)}`);
-        logger.info("MCP tool called", { name, input: rawInput, targetClientId: this.targetClientId });
         const input = parseToolInput(name, rawInput) as Record<string, unknown>;
+        const operationId = options.operationId?.trim() || "";
+        if (!operationId) return this.executeTool(name, input, options);
+        if (!OPERATION_ID_PATTERN.test(operationId)) throw new CanvasToolDecisionError("operation_id_invalid", "operationId 格式无效", 400);
+
+        this.pruneToolOperations();
+        const fingerprint = toolOperationFingerprint(name, input);
+        const existing = this.toolOperations.get(operationId);
+        if (existing) {
+            if (existing.fingerprint !== fingerprint) throw new CanvasToolDecisionError("operation_id_conflict", "operationId 已用于其他工具调用");
+            return existing.promise;
+        }
+        if (this.toolOperations.size >= MAX_TOOL_OPERATION_CACHE) {
+            throw new CanvasToolDecisionError("operation_cache_full", "当前画布操作过多，请稍后重试", 429);
+        }
+
+        const operation: CachedToolOperation = {
+            fingerprint,
+            promise: Promise.resolve(),
+            expiresAt: this.now() + TOOL_OPERATION_CACHE_TTL_MS,
+            settled: false,
+        };
+        operation.promise = this.executeTool(name, input, options);
+        this.toolOperations.set(operationId, operation);
+        void operation.promise.then(
+            () => {
+                operation.settled = true;
+                this.pruneToolOperations();
+            },
+            (error) => {
+                operation.settled = true;
+                // A disconnected or ambiguous canvas is a readiness failure,
+                // not an executed operation. Let the same caller retry after
+                // the browser reconnects instead of replaying stale failure.
+                if (error instanceof CanvasSessionRoutingError) this.toolOperations.delete(operationId);
+                this.pruneToolOperations();
+            },
+        );
+        return operation.promise;
+    }
+
+    private async executeTool(name: ToolName, input: Record<string, unknown>, options: ToolCallOptions) {
+        const clientId = options.routing === "active" ? this.activeClientId : this.targetClientId;
+        const canvasState = this.canvasStates.get(clientId) || null;
+        logger.info("MCP tool called", { name, input, targetClientId: clientId, operationId: options.operationId });
         if (DIRECT_SITE_TOOLS.has(name)) {
-            if (!this.clients.size) throw new Error("当前没有已连接网页");
-            return await this.requestCanvasTool(name, input, name, input);
+            if (!clientId || !this.clients.has(clientId)) throw new CanvasSessionRoutingError("canvas_not_connected", "当前没有已连接网页");
+            return await this.requestCanvasTool(name, input, name, input, clientId, options.operationId);
         }
         const snapshotReadTool = name === "canvas_get_state" || name === "canvas_get_selection" || name === "canvas_export_snapshot";
-        if (snapshotReadTool && (!this.clients.size || !this.canvasState)) throw new Error("当前没有已连接画布");
-        if (name === "canvas_get_state" || name === "canvas_export_snapshot") return compactCanvasState(this.canvasState);
+        if (snapshotReadTool && (!clientId || !this.clients.has(clientId) || !canvasState)) throw new CanvasSessionRoutingError("canvas_not_connected", "当前没有已连接画布");
+        if (name === "canvas_get_state" || name === "canvas_export_snapshot") return compactCanvasState(canvasState);
         if (name === "canvas_get_selection") {
-            const ids = new Set(this.canvasState?.selectedNodeIds || []);
-            return { nodes: (this.canvasState?.nodes || []).filter((node) => ids.has(node.id)).map(compactNode) };
+            const ids = new Set(canvasState?.selectedNodeIds || []);
+            return { nodes: (canvasState?.nodes || []).filter((node) => ids.has(node.id)).map(compactNode) };
         }
-        if (name === "canvas_create_attachment_nodes") return await this.createAttachmentNodes(input as { attachmentIds: string[]; x?: number; y?: number; gap?: number; direction?: "row" | "column" });
-        if (!this.clients.size) throw new Error("当前没有已连接画布");
-        const request = buildCanvasToolRequest(name, input, this.canvasState);
-        return await this.requestCanvasTool(name, input, request.name, request.input);
+        if (name === "canvas_create_attachment_nodes") return await this.createAttachmentNodes(input as { attachmentIds: string[]; x?: number; y?: number; gap?: number; direction?: "row" | "column" }, clientId, canvasState, options.operationId);
+        if (!clientId || !this.clients.has(clientId)) throw new CanvasSessionRoutingError("canvas_not_connected", "当前没有已连接画布");
+        const request = buildCanvasToolRequest(name, input, canvasState);
+        return await this.requestCanvasTool(name, input, request.name, request.input, clientId, options.operationId);
     }
 
     /** 消费网页对单个写工具 proposal 的决定。 */
@@ -431,11 +505,10 @@ export class CanvasSession {
     }
 
     /** 将当前 turn 的附件转换为画布图片节点。 */
-    private async createAttachmentNodes(input: { attachmentIds: string[]; x?: number; y?: number; gap?: number; direction?: "row" | "column" }) {
-        const clientId = this.targetClientId;
-        if (!this.clients.has(clientId)) throw new Error("当前没有已连接画布");
+    private async createAttachmentNodes(input: { attachmentIds: string[]; x?: number; y?: number; gap?: number; direction?: "row" | "column" }, clientId: string, canvasState: CanvasSnapshot | null, operationId?: string) {
+        if (!this.clients.has(clientId)) throw new CanvasSessionRoutingError("canvas_not_connected", "当前没有已连接画布");
         const attachments = input.attachmentIds.map((id) => this.getTurnAttachment(clientId, id));
-        const x = Number(input.x ?? nextCanvasX(this.canvasState));
+        const x = Number(input.x ?? nextCanvasX(canvasState));
         const y = Number(input.y ?? 0);
         const gap = Number(input.gap ?? 40);
         const direction = input.direction || "row";
@@ -453,16 +526,15 @@ export class CanvasSession {
             offset += (direction === "row" ? size.width : size.height) + gap;
             return node;
         });
-        await this.requestCanvasTool("canvas_create_attachment_nodes", input, "canvas_create_attachment_nodes", { nodes });
+        await this.requestCanvasTool("canvas_create_attachment_nodes", input, "canvas_create_attachment_nodes", { nodes }, clientId, operationId);
         return { nodes: nodes.map(({ id, attachmentId, title }) => ({ id, attachmentId, title })) };
     }
 
     /** 为工具请求创建 pending 状态；只读立即分派，写操作先发送 proposal。 */
-    private requestCanvasTool(originalName: ToolName, originalInput: Record<string, unknown>, dispatchName: ToolName, dispatchInput: Record<string, unknown>) {
-        const operationId = crypto.randomUUID();
-        const clientId = this.targetClientId;
+    private requestCanvasTool(originalName: ToolName, originalInput: Record<string, unknown>, dispatchName: ToolName, dispatchInput: Record<string, unknown>, clientId: string, callerOperationId?: string) {
+        const operationId = callerOperationId || crypto.randomUUID();
         const connection = this.clients.get(clientId);
-        if (!connection) throw new Error("当前没有已连接画布");
+        if (!connection) throw new CanvasSessionRoutingError("canvas_not_connected", "当前没有已连接画布");
         const readOnly = READ_ONLY_TOOLS.has(originalName);
         return new Promise<unknown>((resolve, reject) => {
             const commitment = readOnly ? "" : crypto.randomBytes(32).toString("base64url");
@@ -589,9 +661,31 @@ export class CanvasSession {
         });
     }
 
+    private pruneToolOperations() {
+        const now = this.now();
+        this.toolOperations.forEach((operation, operationId) => {
+            if (operation.settled && operation.expiresAt <= now) this.toolOperations.delete(operationId);
+        });
+    }
+
     private now() {
         return (this.options.now || Date.now)();
     }
+}
+
+function toolOperationFingerprint(name: ToolName, input: Record<string, unknown>) {
+    return crypto.createHash("sha256").update(`${name}\0${stableJson(input)}`).digest("base64url");
+}
+
+function stableJson(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+    if (value && typeof value === "object") {
+        return `{${Object.entries(value as Record<string, unknown>)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+            .join(",")}}`;
+    }
+    return JSON.stringify(value) ?? "null";
 }
 
 /** 向 SSE 连接写入一个事件。 */

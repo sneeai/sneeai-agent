@@ -6,6 +6,7 @@
 export const PROTOCOL_VERSION = 1 as const;
 export const TOOL_AUTHORIZATION_CAPABILITY = "tool.authorization.v1" as const;
 export const PAIRING_CHALLENGE_CAPABILITY = "pairing.challenge.v1" as const;
+export const ACTIVE_CANVAS_ROUTING_CAPABILITY = "mcp.active-canvas.v1" as const;
 
 export const PROTOCOL_CAPABILITIES = Object.freeze([
     "health.v1",
@@ -16,6 +17,7 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
     "sessions.profile.v1",
     "runtime.claim.v1",
     "mcp.tools.v1",
+    ACTIVE_CANVAS_ROUTING_CAPABILITY,
     "entitlement.ed25519.v1",
     TOOL_AUTHORIZATION_CAPABILITY,
     "codex.prompt.v1",

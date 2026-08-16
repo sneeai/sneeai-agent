@@ -4,6 +4,7 @@ import path from "node:path";
 
 export const AGENT_PROTOCOL_VERSION = 1;
 export const REQUIRED_AGENT_CAPABILITIES = ["mcp.tools.v1", "tool.authorization.v1"] as const;
+export const PLUGIN_VERSION = "0.1.0";
 
 type LocalAgentConfig = { url: string; token: string };
 type LocalAgentHealth = { ok?: boolean; service?: string; protocolVersion?: unknown; capabilities?: unknown };
@@ -52,6 +53,7 @@ export async function callLocalAgent(config: LocalAgentConfig, name: string, inp
                 "x-canvas-agent-token": config.token,
                 "x-canvas-agent-protocol-version": String(AGENT_PROTOCOL_VERSION),
                 "x-canvas-agent-capabilities": REQUIRED_AGENT_CAPABILITIES.join(","),
+                "x-canvas-plugin-version": PLUGIN_VERSION,
             },
             body: JSON.stringify({ name, input }),
         });

@@ -7,6 +7,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { createAgentTicket } from "../pairing-ticket.js";
+
 type TicketInput = {
     userId: string;
     profileId: string;
@@ -459,18 +461,29 @@ test("website entitlement remains fail-closed across the local HTTP Agent lifecy
         await events.next("hello");
 
         try {
+            const internalTicket = createAgentTicket(readAgentConfig(home).token, {
+                kind: "internal-mcp",
+                origin: "local-internal",
+                profileKey: renewalProfileKey,
+                clientId: "nested-mcp",
+                now: clock.value,
+            });
             const toolResponsePromise = fetch(`${agentUrl}/api/tools`, {
                 method: "POST",
                 headers: {
                     "content-type": "application/json",
-                    "x-canvas-agent-token": readAgentConfig(home).token,
-                    "x-canvas-profile-id": renewalProfileKey,
+                    "x-canvas-agent-internal-ticket": internalTicket,
                     "x-canvas-agent-protocol-version": "1",
                     "x-canvas-agent-capabilities": "mcp.tools.v1,tool.authorization.v1",
                 },
                 body: JSON.stringify({ name: "canvas_create_text_node", input: { text: "authorized once" } }),
             });
-            const proposal = await events.next("tool_proposal");
+            const firstOutcome = await Promise.race([
+                events.next("tool_proposal").then((proposal) => ({ proposal })),
+                toolResponsePromise.then((response) => ({ response: { status: response.status } })),
+            ]);
+            assert.ok("proposal" in firstOutcome, JSON.stringify(firstOutcome));
+            const proposal = firstOutcome.proposal;
             const operationId = String(proposal.operationId || "");
             const commitment = String(proposal.commitment || "");
             assert.match(operationId, /^[0-9a-f-]{36}$/i);

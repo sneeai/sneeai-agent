@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+target_user="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [ -z "$target_user" ] || [ "$target_user" = "root" ] || [ "$target_user" = "loginwindow" ]; then
+  exit 0
+fi
+target_uid="$(/usr/bin/id -u "$target_user")"
+/bin/launchctl bootout "gui/$target_uid/com.sneeai.agent" >/dev/null 2>&1 || true
+exit 0

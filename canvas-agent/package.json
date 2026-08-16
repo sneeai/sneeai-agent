@@ -17,7 +17,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "debug": "tsx src/index.ts --debug",
-    "test": "tsx --test --test-concurrency=1 scripts/build-release.test.mjs src/agent/claude.test.ts src/agent/codex-client.test.ts src/agent/codex-history.test.ts src/agent/codex-provider-policy.test.ts src/agent/codex-runtime.test.ts src/canvas/session.test.ts src/canvas/session-registry.test.ts src/config.test.ts src/entitlement.test.ts src/entitlement-lease.test.ts src/pairing.test.ts src/pairing-ticket.test.ts src/profile.test.ts src/protocol.test.ts src/tool-authorization.test.ts src/server/cors.test.ts src/server/entitlement-http.test.ts src/server/local-file-capabilities.test.ts src/server/runtime.test.ts",
+    "test": "tsx --test --test-concurrency=1 scripts/build-release.test.mjs ../installer/release-plan.test.mjs ../installer/documentation.test.mjs src/agent/claude.test.ts src/agent/codex-client.test.ts src/agent/codex-history.test.ts src/agent/codex-provider-policy.test.ts src/agent/codex-runtime.test.ts src/canvas/session.test.ts src/canvas/session-registry.test.ts src/config.test.ts src/credential-store.test.ts src/entitlement.test.ts src/entitlement-lease.test.ts src/network/external-fetch.test.ts src/pairing.test.ts src/pairing-ticket.test.ts src/profile.test.ts src/protocol.test.ts src/tool-authorization.test.ts src/utils/logger.test.ts src/server/cors.test.ts src/server/entitlement-http.test.ts src/server/local-file-capabilities.test.ts src/server/port-fallback.test.ts src/server/runtime.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "build": "tsc -p tsconfig.json",
     "build:release": "node scripts/build-release.mjs",
@@ -28,8 +28,12 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@openai/codex": "0.145.0",
     "express": "^5.1.0",
+    "pac-proxy-agent": "9.1.0",
     "winston": "^3.19.0",
     "zod": "^3.25.0"
+  },
+  "overrides": {
+    "hono": "4.12.34"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",

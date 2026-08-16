@@ -114,8 +114,10 @@ export const logger = new Logger();
 /** Redact credential-shaped values before diagnostics can leave the local process. */
 export function redactSensitiveText(value: string) {
     return value
+        .replace(/\b((?:https?|socks(?:4a?|5h?)):\/\/)[^\s/?#]*@/gi, "$1[REDACTED]@")
         .replace(/(bearer\s+)[A-Za-z0-9._~+/=-]+/gi, "$1[REDACTED]")
         .replace(/([?&](?:api[_-]?key|token|secret|password|authorization)=)[^&#\s]+/gi, "$1[REDACTED]")
         .replace(/(\b(?:api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*)(["']?)[^\s,;"'}]+/gi, "$1$2[REDACTED]")
-        .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED]");
+        .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b/g, "[REDACTED]")
+        .replace(/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[REDACTED]");
 }

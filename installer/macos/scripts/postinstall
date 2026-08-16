@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+target_user="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [ -z "$target_user" ] || [ "$target_user" = "root" ] || [ "$target_user" = "loginwindow" ]; then
+  echo "No signed-in macOS user is available for the SneeAI LaunchAgent." >&2
+  exit 1
+fi
+target_uid="$(/usr/bin/id -u "$target_user")"
+target_home="$(/usr/bin/dscl . -read "/Users/$target_user" NFSHomeDirectory | /usr/bin/cut -d ' ' -f 2-)"
+plist="$target_home/Library/LaunchAgents/com.sneeai.agent.plist"
+agent="$target_home/Library/Application Support/SneeAI/Agent/sneeai-agent"
+
+if [ ! -x "$agent" ] || [ ! -f "$plist" ]; then
+  echo "SneeAI Agent payload was not installed in the current user's home directory." >&2
+  exit 1
+fi
+
+/usr/sbin/chown -R "$target_user":staff "$target_home/Library/Application Support/SneeAI/Agent" "$plist"
+/bin/chmod 700 "$agent"
+/bin/chmod 600 "$plist"
+/bin/launchctl bootout "gui/$target_uid/com.sneeai.agent" >/dev/null 2>&1 || true
+/bin/launchctl bootstrap "gui/$target_uid" "$plist"
+/bin/launchctl kickstart -k "gui/$target_uid/com.sneeai.agent"
+exit 0

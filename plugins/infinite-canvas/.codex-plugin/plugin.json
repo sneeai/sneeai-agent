@@ -1,6 +1,6 @@
 {
   "name": "sneeai",
-  "version": "0.1.0+codex.20260809141444",
+  "version": "0.1.0+codex.20260815185619",
   "description": "Connect Codex to a locally installed Sneeai Agent.",
   "author": {
     "name": "SneeAI",
@@ -8,7 +8,7 @@
   },
   "homepage": "https://sneeai.com/",
   "repository": "https://github.com/sneeai/sneeai-agent",
-  "license": "AGPL-3.0",
+  "license": "AGPL-3.0-only",
   "keywords": [
     "infinite-canvas",
     "canvas",

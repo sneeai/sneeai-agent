@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isProtocolCompatible, negotiateProtocol, PAIRING_CHALLENGE_CAPABILITY, PROTOCOL_CAPABILITIES, PROTOCOL_VERSION, protocolMetadata, REQUIRED_PAIRING_CAPABILITIES, TOOL_AUTHORIZATION_CAPABILITY } from "./protocol.js";
+import { ACTIVE_CANVAS_ROUTING_CAPABILITY, isProtocolCompatible, negotiateProtocol, PAIRING_CHALLENGE_CAPABILITY, PROTOCOL_CAPABILITIES, PROTOCOL_VERSION, protocolMetadata, REQUIRED_PAIRING_CAPABILITIES, TOOL_AUTHORIZATION_CAPABILITY } from "./protocol.js";
 
 test("protocol metadata separates stable compatibility fields from build identity", () => {
     const metadata = protocolMetadata("9.8.7", "commit-abc");
@@ -12,6 +12,7 @@ test("protocol metadata separates stable compatibility fields from build identit
     assert.equal(metadata.releaseId, "9.8.7+commit-abc");
     assert.deepEqual(metadata.capabilities, PROTOCOL_CAPABILITIES);
     assert.ok(metadata.capabilities.includes(TOOL_AUTHORIZATION_CAPABILITY));
+    assert.ok(metadata.capabilities.includes(ACTIVE_CANVAS_ROUTING_CAPABILITY));
     assert.ok(REQUIRED_PAIRING_CAPABILITIES.includes(TOOL_AUTHORIZATION_CAPABILITY));
     assert.ok(REQUIRED_PAIRING_CAPABILITIES.includes(PAIRING_CHALLENGE_CAPABILITY));
     assert.ok(metadata.capabilities.includes("codex.prompt.v1"));

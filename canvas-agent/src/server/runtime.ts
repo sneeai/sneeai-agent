@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 
 import { loadConfig, type CanvasAgentConfig } from "../config.js";
 import { probeAgent, type AgentProbeResult } from "../pairing.js";
-import { startHttpServer } from "./http.js";
+import { startHttpServerWithFallback } from "./http.js";
 
 const RACE_TIMEOUT_MS = 4_000;
 const RACE_RETRY_MS = 50;
@@ -13,37 +13,7 @@ export async function ensurePluginHttpServer(): Promise<Server | null> {
     const current = await probeAgent(config);
     if (current === "ready") return null;
     if (current !== "offline") throw agentStatusError(current);
-
-    const server = startHttpServer({ silent: true });
-    try {
-        await waitForListening(server);
-        return server;
-    } catch (error) {
-        if (!isAddressInUse(error)) throw error;
-        const raced = await waitForReadyAgent(config);
-        if (raced === "ready") return null;
-        throw agentStatusError(raced);
-    }
-}
-
-function waitForListening(server: Server) {
-    if (server.listening) return Promise.resolve();
-    return new Promise<void>((resolve, reject) => {
-        const onListening = () => {
-            cleanup();
-            resolve();
-        };
-        const onError = (error: Error) => {
-            cleanup();
-            reject(error);
-        };
-        const cleanup = () => {
-            server.off("listening", onListening);
-            server.off("error", onError);
-        };
-        server.once("listening", onListening);
-        server.once("error", onError);
-    });
+    return startHttpServerWithFallback({ silent: true });
 }
 
 async function waitForReadyAgent(config: CanvasAgentConfig): Promise<AgentProbeResult> {
@@ -61,8 +31,4 @@ function agentStatusError(status: AgentProbeResult) {
     if (status === "unauthorized") return new Error("本机端口已有 Sneeai Agent，但 Connect token 与当前插件配置不一致。请停止旧 Agent 后重试。");
     if (status === "incompatible") return new Error("本机端口被其他服务或不同版本的 Sneeai Agent 占用。请停止该进程后重试。");
     return new Error("Sneeai Agent 本机桥接启动失败");
-}
-
-function isAddressInUse(error: unknown) {
-    return error instanceof Error && "code" in error && error.code === "EADDRINUSE";
 }

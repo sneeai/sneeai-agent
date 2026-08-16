@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { KAPEAI_RELAY_BASE_URL } from "../agent/codex-provider-policy.js";
 import { codexRuntimeFingerprint } from "../agent/codex-runtime.js";
 import { AGENT_SERVICE, BUILD_ID, RELEASE_ID, VERSION } from "../config.js";
+import { createAgentTicket } from "../pairing-ticket.js";
 import { CANVAS_PROFILE_HEADER } from "../profile.js";
 import { PROTOCOL_CAPABILITIES, PROTOCOL_VERSION } from "../protocol.js";
 import { postCanvasAgentTool } from "./mcp.js";
@@ -62,6 +63,13 @@ test("the plugin MCP process starts a protocol-clean HTTP bridge", async (t) => 
     assert.equal(health.releaseId, RELEASE_ID);
     assert.deepEqual(health.capabilities, PROTOCOL_CAPABILITIES);
     assert.equal(typeof health.diagnostics, "object");
+    assert.equal(health.agentOnline, true);
+    assert.equal(health.sitePaired, false);
+    assert.equal(health.activeCanvas, false);
+    assert.equal(health.pluginInstalled, false);
+    assert.equal(health.pluginVersion, null);
+    assert.equal(health.mcpActiveCanvas, false);
+    assert.equal(health.mcpLastSeenAt, null);
 
     const denied = await fetch(`${fixture.url}/pair`, { method: "POST", headers: { origin: "https://evil.example" } });
     assert.equal(denied.status, 403);
@@ -219,8 +227,25 @@ test("profile-bound pairing isolates HTTP workspaces and MCP canvas state", asyn
     await postProfileState(fixture.url, second.token, "client-b", "canvas-b");
 
     const bridgeConfig = readAgentConfig(fixture.home);
-    assert.equal((await postCanvasAgentTool(bridgeConfig, "canvas_get_state", {}, first.profileKey) as { projectId?: string }).projectId, "canvas-a");
-    assert.equal((await postCanvasAgentTool(bridgeConfig, "canvas_get_state", {}, second.profileKey) as { projectId?: string }).projectId, "canvas-b");
+    const firstInternalTicket = createAgentTicket(bridgeConfig.token, { kind: "internal-mcp", origin: "local-internal", profileKey: first.profileKey, clientId: "nested-mcp" });
+    const secondInternalTicket = createAgentTicket(bridgeConfig.token, { kind: "internal-mcp", origin: "local-internal", profileKey: second.profileKey, clientId: "nested-mcp" });
+    assert.equal((await postCanvasAgentTool(bridgeConfig, "canvas_get_state", {}, { internalTicket: firstInternalTicket }) as { projectId?: string }).projectId, "canvas-a");
+    assert.equal((await postCanvasAgentTool(bridgeConfig, "canvas_get_state", {}, { internalTicket: secondInternalTicket }) as { projectId?: string }).projectId, "canvas-b");
+    const nestedMcpHealth = await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>;
+    assert.equal(nestedMcpHealth.pluginInstalled, false);
+    assert.equal(nestedMcpHealth.mcpLastSeenAt, null);
+    const forbiddenProfileSelection = await fetch(`${fixture.url}/api/tools`, {
+        method: "POST",
+        headers: {
+            "content-type": "application/json",
+            "x-canvas-agent-token": bridgeConfig.token,
+            "x-canvas-profile-id": first.profileKey,
+            "x-canvas-agent-protocol-version": String(PROTOCOL_VERSION),
+            "x-canvas-agent-capabilities": "mcp.tools.v1,tool.authorization.v1",
+        },
+        body: JSON.stringify({ name: "canvas_get_state", input: {} }),
+    });
+    assert.equal(forbiddenProfileSelection.status, 401);
 
     const crossProfile = await fetch(`${fixture.url}/agent/codex/workspace`, { headers: { origin: DEV_ORIGIN, "x-canvas-agent-token": first.token, [CANVAS_PROFILE_HEADER]: second.profileKey } });
     assert.equal(crossProfile.status, 401);
@@ -342,7 +367,62 @@ test("concurrent plugin MCP processes reuse one HTTP bridge", async (t) => {
     assert.deepEqual(await fetchRuntime(fixture.url, config.token), initialRuntime);
 });
 
-test("a changed Codex config hands the idle HTTP bridge to the new MCP process", async (t) => {
+test("legacy local plugin token routes tools to the active paired canvas", async (t) => {
+    const fixture = await runtimeFixture(t);
+    fs.mkdirSync(fixture.codexHome, { recursive: true });
+    fs.writeFileSync(path.join(fixture.codexHome, "config.toml"), `model_provider = "custom"\n[model_providers.custom]\nname = "KapeAI"\nbase_url = "${KAPEAI_RELAY_BASE_URL}"\n`);
+    const child = startMcpRuntime(fixture);
+    const eventBodies: ReadableStream<Uint8Array>[] = [];
+    t.after(async () => {
+        await Promise.allSettled(eventBodies.map((body) => body.cancel()));
+        await stopChild(child);
+    });
+    await waitForAgent(fixture.url);
+    const persistentToken = readAgentConfig(fixture.home).token;
+
+    const empty = await postLocalTool(fixture.url, persistentToken, "canvas_get_state");
+    assert.equal(empty.response.status, 409);
+    assert.equal(empty.body.code, "canvas_not_connected");
+    const pluginHealth = await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>;
+    assert.equal(pluginHealth.pluginInstalled, true);
+    assert.equal(pluginHealth.pluginVersion, "0.1.0-test");
+    assert.equal(pluginHealth.mcpActiveCanvas, false);
+    assert.equal(typeof pluginHealth.mcpLastSeenAt, "number");
+
+    const first = await pairProfile(fixture.url, "user-a", "client-a");
+    const firstEvents = await openProfileEvents(fixture.url, first.token!, "client-a");
+    if (firstEvents.body) eventBodies.push(firstEvents.body);
+    await postProfileState(fixture.url, first.token!, "client-a", "project-a");
+    const pairedHealth = await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>;
+    assert.equal(pairedHealth.sitePaired, true);
+    assert.equal(pairedHealth.activeCanvas, false);
+
+    const second = await pairProfile(fixture.url, "user-b", "client-b");
+    const secondEvents = await openProfileEvents(fixture.url, second.token!, "client-b");
+    if (secondEvents.body) eventBodies.push(secondEvents.body);
+    await postProfileState(fixture.url, second.token!, "client-b", "project-b");
+
+    const ambiguous = await postLocalTool(fixture.url, persistentToken, "canvas_get_state");
+    assert.equal(ambiguous.response.status, 409);
+    assert.equal(ambiguous.body.code, "canvas_binding_ambiguous");
+
+    await activateProfileCanvas(fixture.url, first.token!, "client-a");
+    assert.equal((await postLocalTool(fixture.url, persistentToken, "canvas_get_state")).body.result?.projectId, "project-a");
+    const firstActiveHealth = await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>;
+    assert.equal(firstActiveHealth.activeCanvas, true);
+    assert.equal(firstActiveHealth.mcpActiveCanvas, true);
+
+    await activateProfileCanvas(fixture.url, second.token!, "client-b");
+    assert.equal((await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>).mcpActiveCanvas, false);
+    assert.equal((await postLocalTool(fixture.url, persistentToken, "canvas_get_state")).body.result?.projectId, "project-b");
+    assert.equal((await fetch(`${fixture.url}/health`).then((response) => response.json()) as Record<string, unknown>).mcpActiveCanvas, true);
+
+    const ticketScoped = await postTicketTool(fixture.url, first.token!, "client-a", "canvas_get_state");
+    assert.equal(ticketScoped.response.status, 200);
+    assert.equal(ticketScoped.body.result?.projectId, "project-a");
+});
+
+test("a changed Codex config waits for a pending canvas tool before handoff", async (t) => {
     const fixture = await runtimeFixture(t);
     fs.mkdirSync(fixture.codexHome, { recursive: true });
     fs.writeFileSync(path.join(fixture.codexHome, "config.toml"), `model_provider = "custom"\n[model_providers.custom]\nname = "KapeAI"\nbase_url = "${KAPEAI_RELAY_BASE_URL}"\n`);
@@ -355,8 +435,8 @@ test("a changed Codex config hands the idle HTTP bridge to the new MCP process",
     const firstRuntime = await fetchRuntime(fixture.url, config.token);
     const canvasEvents = await openProfileEvents(fixture.url, config.token, "handoff-canvas");
     const statusEvents = await openProfileEvents(fixture.url, config.token, "handoff-status");
-    const canvasEventsClosed = canvasEvents.text();
     const statusEventsClosed = statusEvents.text();
+    await activateProfileCanvas(fixture.url, config.token, "handoff-canvas");
     const pendingTool = fetch(`${fixture.url}/api/tools`, {
         method: "POST",
         headers: {
@@ -372,6 +452,11 @@ test("a changed Codex config hands the idle HTTP bridge to the new MCP process",
     fs.writeFileSync(path.join(fixture.codexHome, "config.toml"), 'model_provider = "second"\n[model_providers.second]\nbase_url = "https://second.example/v1"\n');
     const second = startMcpRuntime(fixture);
     t.after(() => stopChild(second));
+    await delay(500);
+    const blockedRuntime = await fetchRuntime(fixture.url, config.token);
+    assert.equal(blockedRuntime.fingerprint, firstRuntime.fingerprint);
+
+    await canvasEvents.body?.cancel();
     const secondRuntime = await waitForRuntimeChange(fixture.url, config.token, firstRuntime.fingerprint);
 
     assert.notEqual(secondRuntime.fingerprint, firstRuntime.fingerprint);
@@ -380,7 +465,6 @@ test("a changed Codex config hands the idle HTTP bridge to the new MCP process",
     assert.equal(second.exitCode, null);
     assert.equal(first.stdoutText(), "");
     assert.equal(second.stdoutText(), "");
-    assert.match(await withTimeout(canvasEventsClosed, 2_000), /event: hello/);
     assert.match(await withTimeout(statusEventsClosed, 2_000), /event: hello/);
     assert.equal((await withTimeout(pendingTool, 2_000)).status, 500);
 });
@@ -646,24 +730,31 @@ test("a lazy MCP tool call waits for the web canvas to connect", async (t) => {
     const url = `http://127.0.0.1:${port}`;
     let ready = false;
     let attempts = 0;
+    const operationIds = new Set<string>();
     const server = createServer((req, res) => {
         if (req.url === "/health") {
             res.setHeader("content-type", "application/json");
             return void res.end(JSON.stringify({ ok: true, service: AGENT_SERVICE, protocolVersion: PROTOCOL_VERSION, capabilities: PROTOCOL_CAPABILITIES, buildVersion: VERSION }));
         }
-        attempts += 1;
-        res.setHeader("content-type", "application/json");
-        res.setHeader("x-canvas-agent-service", AGENT_SERVICE);
-        res.setHeader("x-canvas-agent-version", VERSION);
-        res.setHeader("x-canvas-agent-protocol-version", String(PROTOCOL_VERSION));
-        res.setHeader("x-canvas-agent-capabilities", PROTOCOL_CAPABILITIES.join(","));
-        res.setHeader("x-canvas-agent-build-version", VERSION);
-        if (!ready) {
-            res.statusCode = 500;
-            res.end(JSON.stringify({ ok: false, error: "当前没有已连接画布" }));
-            return;
-        }
-        res.end(JSON.stringify({ ok: true, result: { nodes: [] } }));
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+        req.on("end", () => {
+            attempts += 1;
+            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { operationId?: string };
+            if (body.operationId) operationIds.add(body.operationId);
+            res.setHeader("content-type", "application/json");
+            res.setHeader("x-canvas-agent-service", AGENT_SERVICE);
+            res.setHeader("x-canvas-agent-version", VERSION);
+            res.setHeader("x-canvas-agent-protocol-version", String(PROTOCOL_VERSION));
+            res.setHeader("x-canvas-agent-capabilities", PROTOCOL_CAPABILITIES.join(","));
+            res.setHeader("x-canvas-agent-build-version", VERSION);
+            if (!ready) {
+                res.statusCode = 500;
+                res.end(JSON.stringify({ ok: false, error: "当前没有已连接画布" }));
+                return;
+            }
+            res.end(JSON.stringify({ ok: true, result: { nodes: [] } }));
+        });
     });
     await new Promise<void>((resolve, reject) => {
         server.once("error", reject);
@@ -675,6 +766,7 @@ test("a lazy MCP tool call waits for the web canvas to connect", async (t) => {
     const result = await postCanvasAgentTool({ url, token: "test-token" }, "canvas_get_state", {});
     assert.deepEqual(result, { nodes: [] });
     assert.ok(attempts > 1);
+    assert.equal(operationIds.size, 1);
 });
 
 test("MCP refuses an old bridge before posting a tool call", async (t) => {
@@ -762,6 +854,48 @@ async function postProfileState(url: string, token: string, clientId: string, pr
     assert.equal(response.status, 200);
 }
 
+async function activateProfileCanvas(url: string, token: string, clientId: string) {
+    const response = await fetch(`${url}/canvas/activate?clientId=${encodeURIComponent(clientId)}`, {
+        method: "POST",
+        headers: { origin: DEV_ORIGIN, "content-type": "application/json", "x-canvas-agent-token": token },
+        body: "{}",
+    });
+    assert.equal(response.status, 200);
+}
+
+async function postLocalTool(url: string, token: string, name: string) {
+    const response = await fetch(`${url}/api/tools`, {
+        method: "POST",
+        headers: {
+            "content-type": "application/json",
+            "x-canvas-agent-token": token,
+            "x-canvas-agent-protocol-version": String(PROTOCOL_VERSION),
+            "x-canvas-agent-capabilities": "mcp.tools.v1,tool.authorization.v1",
+            "x-canvas-plugin-version": "0.1.0-test",
+        },
+        body: JSON.stringify({ name, input: {} }),
+    });
+    const body = await response.json() as { ok?: boolean; code?: string; error?: string; result?: { projectId?: string } };
+    return { response, body };
+}
+
+async function postTicketTool(url: string, token: string, clientId: string, name: string) {
+    const response = await fetch(`${url}/api/tools`, {
+        method: "POST",
+        headers: {
+            origin: DEV_ORIGIN,
+            "content-type": "application/json",
+            "x-canvas-agent-token": token,
+            "x-canvas-client-id": clientId,
+            "x-canvas-agent-protocol-version": String(PROTOCOL_VERSION),
+            "x-canvas-agent-capabilities": "mcp.tools.v1,tool.authorization.v1",
+        },
+        body: JSON.stringify({ name, input: {} }),
+    });
+    const body = await response.json() as { ok?: boolean; code?: string; error?: string; result?: { projectId?: string } };
+    return { response, body };
+}
+
 async function runtimeFixture(t: test.TestContext) {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "canvas-agent-runtime-"));
     const port = await availablePort();
@@ -780,6 +914,8 @@ function startMcpRuntime(fixture: { home: string; codexHome: string; port: numbe
             CODEX_HOME: fixture.codexHome,
             PORT: String(fixture.port),
             CANVAS_AGENT_PAIR_ORIGINS: DEV_ORIGIN,
+            NODE_ENV: "test",
+            SNEEAI_AGENT_DISABLE_SECURE_CREDENTIALS: "1",
             ...options.env,
         },
         detached: options.detached,

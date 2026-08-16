@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE installer-gui-script PUBLIC "-//Apple//DTD Installer 1.0//EN" "http://www.apple.com/DTDs/Installer-1.0.dtd">
+<installer-gui-script minSpecVersion="2">
+  <title>SneeAI Agent</title>
+  <organization>com.sneeai</organization>
+  <options customize="never" require-scripts="true" hostArchitectures="__HOST_ARCH__" />
+  <domains enable_anywhere="false" enable_currentUserHome="true" enable_localSystem="false" />
+  <choices-outline>
+    <line choice="default" />
+  </choices-outline>
+  <choice id="default" visible="false">
+    <pkg-ref id="com.sneeai.agent" />
+  </choice>
+  <pkg-ref id="com.sneeai.agent" version="__AGENT_VERSION__" onConclusion="none">sneeai-agent-component.pkg</pkg-ref>
+</installer-gui-script>

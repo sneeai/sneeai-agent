@@ -3,7 +3,7 @@ import type { ServerResponse } from "node:http";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CanvasCodexControlError, CanvasSession, READ_ONLY_TOOL_NAMES, type PendingToolProposal } from "./session.js";
+import { CanvasCodexControlError, CanvasSession, CanvasSessionRoutingError, READ_ONLY_TOOL_NAMES, type PendingToolProposal } from "./session.js";
 import { toolInputSchemas } from "./schemas.js";
 
 test("MCP 读取当前激活网页的画布", async (t) => {
@@ -22,6 +22,22 @@ test("MCP 读取当前激活网页的画布", async (t) => {
 
     session.activateClient("second");
     assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+});
+
+test("MCP without a connected canvas returns a retryable routing error", async () => {
+    const session = new CanvasSession();
+    const operationId = "9bb7db86-ece7-4c42-a847-778948e873d6";
+
+    await assert.rejects(
+        session.callTool("canvas_get_state", {}, { operationId }),
+        (error: unknown) => error instanceof CanvasSessionRoutingError && error.code === "canvas_not_connected" && error.statusCode === 409,
+    );
+
+    const first = connect(session, "connected");
+    session.updateState(snapshot("connected-canvas"), "connected");
+    session.activateClient("connected");
+    assert.equal(field(await session.callTool("canvas_get_state", {}, { operationId }), "projectId"), "connected-canvas");
+    first.close();
 });
 
 test("画布写操作只发送给当前激活网页", async (t) => {
@@ -63,6 +79,53 @@ test("画布写操作只发送给当前激活网页", async (t) => {
     assert.equal(second.events("tool_call").length, 1);
     session.resolveResult("second", { requestId: String(field(call, "requestId")), result: { ok: true } });
     assert.deepEqual(await result, { ok: true });
+});
+
+test("repeated caller operationId reuses the pending and recorded tool result", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    t.after(() => first.close());
+    session.updateState(snapshot("canvas-first"), "first");
+    session.activateClient("first");
+    const operationId = "8bb7db86-ece7-4c42-a847-778948e873d6";
+
+    const original = session.callTool("canvas_create_text_node", { text: "idempotent" }, { operationId });
+    const concurrentRetry = session.callTool("canvas_create_text_node", { text: "idempotent" }, { operationId });
+    assert.equal(concurrentRetry, original);
+    assert.equal(first.events("tool_proposal").length, 1);
+    assert.equal(field(first.event("tool_proposal"), "operationId"), operationId);
+
+    await approve(session, first, "first");
+    session.resolveResult("first", { requestId: operationId, result: { created: true } });
+    assert.deepEqual(await Promise.all([original, concurrentRetry]), [{ created: true }, { created: true }]);
+
+    const completedRetry = session.callTool("canvas_create_text_node", { text: "idempotent" }, { operationId });
+    assert.equal(completedRetry, original);
+    assert.deepEqual(await completedRetry, { created: true });
+    assert.equal(first.events("tool_proposal").length, 1);
+    assert.throws(
+        () => session.callTool("canvas_create_text_node", { text: "different" }, { operationId }),
+        (error: unknown) => error instanceof Error && "code" in error && error.code === "operation_id_conflict",
+    );
+});
+
+test("a full idempotency cache preserves unexpired results and rejects new operations", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    t.after(() => first.close());
+    session.updateState(snapshot("canvas-first"), "first");
+    session.activateClient("first");
+
+    const operationIds = Array.from({ length: 256 }, (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`);
+    for (const operationId of operationIds) {
+        assert.equal(field(await session.callTool("canvas_get_state", {}, { operationId }), "projectId"), "canvas-first");
+    }
+
+    assert.throws(
+        () => session.callTool("canvas_get_state", {}, { operationId: "00000000-0000-4000-8000-000000000256" }),
+        (error: unknown) => error instanceof Error && "code" in error && error.code === "operation_cache_full" && "statusCode" in error && error.statusCode === 429,
+    );
+    assert.equal(field(await session.callTool("canvas_get_state", {}, { operationId: operationIds[0] }), "projectId"), "canvas-first");
 });
 
 test("当前 turn 的图片附件可在发起标签页画布创建图片节点", async (t) => {
@@ -283,6 +346,35 @@ test("a consumed permit JTI cannot authorize another operation", async (t) => {
     assert.equal(first.events("tool_call").length, 1);
 });
 
+test("concurrent duplicate decisions dispatch an operation only once", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    t.after(() => first.close());
+    const result = session.callTool("canvas_create_text_node", { text: "once" });
+    const proposal = first.event("tool_proposal") as PendingToolProposal;
+    let releaseVerification!: () => void;
+    const verification = new Promise<void>((resolve) => {
+        releaseVerification = resolve;
+    });
+    const verify = async () => {
+        await verification;
+        return { jti: "duplicate-decision-jti", expiresAt: Date.now() + 60_000 };
+    };
+
+    const decisions = [
+        session.decideTool("first", { operationId: proposal.operationId, decision: "approve" }, verify),
+        session.decideTool("first", { operationId: proposal.operationId, decision: "approve" }, verify),
+    ];
+    releaseVerification();
+    assert.deepEqual((await Promise.all(decisions)).sort(), [false, true]);
+    assert.equal(first.events("tool_call").length, 1);
+
+    const requestId = String(field(first.event("tool_call"), "requestId"));
+    assert.equal(session.resolveResult("first", { requestId, result: { ok: true } }), true);
+    assert.equal(session.resolveResult("first", { requestId, result: { ok: true } }), false);
+    await result;
+});
+
 test("a proposal timeout rejects without dispatching", async (t) => {
     const session = new CanvasSession({ requestTimeoutMs: 5 });
     const first = connect(session, "first");
@@ -447,7 +539,7 @@ test("Codex interrupt scope requires the bound client and exact active thread an
     assert.deepEqual(session.authorizeCodexInterrupt({ profileKey: "profile-a", clientId: "first", threadId: "thread-a" }), { threadId: "thread-a", turnId: "turn-a" });
 });
 
-test("runtime handoff remains busy until every Codex HTTP operation is released", () => {
+test("runtime handoff remains busy until every Codex HTTP operation and canvas tool are released", async () => {
     const session = new CanvasSession();
     const releaseFirst = session.beginCodexOperation();
     const releaseSecond = session.beginCodexOperation();
@@ -463,6 +555,16 @@ test("runtime handoff remains busy until every Codex HTTP operation is released"
     session.setCodexState({ busy: true });
     assert.equal(session.runtimeBusy, true);
     session.setCodexState({ busy: false });
+    assert.equal(session.runtimeBusy, false);
+
+    const client = connect(session, "pending-client");
+    session.activateClient("pending-client");
+    const pending = session.callTool("canvas_create_text_node", { text: "pending" });
+    assert.equal(session.runtimeBusy, true);
+    await approve(session, client, "pending-client");
+    assert.equal(session.runtimeBusy, true);
+    client.close();
+    await assert.rejects(pending, /断开/);
     assert.equal(session.runtimeBusy, false);
 });
 
@@ -489,6 +591,22 @@ test("a bound client remains the tool target while focus changes", async (t) => 
 
     session.releaseClient("first");
     assert.equal(field(await session.callTool("canvas_get_state", {}), "projectId"), "canvas-second");
+});
+
+test("an external plugin uses the active canvas instead of a web turn binding", async (t) => {
+    const session = new CanvasSession();
+    const first = connect(session, "first");
+    const second = connect(session, "second");
+    t.after(() => {
+        first.close();
+        second.close();
+    });
+    session.updateState(snapshot("canvas-first"), "first");
+    session.updateState(snapshot("canvas-second"), "second");
+    session.bindClient("first");
+    session.activateClient("second");
+
+    assert.equal(field(await session.callTool("canvas_get_state", {}, { routing: "active" }), "projectId"), "canvas-second");
 });
 
 test("closing the bound client falls back to the active client", async (t) => {

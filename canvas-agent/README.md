@@ -1,4 +1,4 @@
-# Sneeai Agent
+# SneeAI Agent
 
 Sneeai Agent is the independent local runtime for SneeAI. Users download and update it separately from the Codex plugin. It runs on the user's computer, listens only on `127.0.0.1`, and connects the SneeAI website to the user's local Codex.
 
@@ -10,7 +10,11 @@ For diagnostics:
 
 After building, run `node dist/index.js doctor` or `node dist/index.js version`.
 
-The Agent stores its local configuration in `~/.sneeai-agent/sneeai-agent.json`. It never sends the user's Codex credentials to SneeAI.
+The Agent stores non-secret local configuration in `~/.sneeai-agent/sneeai-agent.json`. On macOS the Connect token is stored in the current user's Keychain; on Windows it is protected with current-user DPAPI. Existing plaintext configuration is migrated on the next runtime start without rotating the token. The Agent never sends the user's Codex credentials to SneeAI.
+
+External Agent requests honor an explicit Agent proxy, a concrete Windows/macOS system PAC URL or manual system proxy, standard proxy environment variables, then direct access. WPAD without a concrete PAC URL is reported as unsupported. Loopback traffic always bypasses proxies.
+
+`npm run build:release` currently creates reproducible ZIP/TAR compatibility archives plus SHA-256 files and a release manifest. It does not create, sign, or notarize an end-user installer. The manifest records the expected MSI/PKG targets as `not_built` so a release channel cannot mistake an archive for an installer. See [installer/README.md](../installer/README.md).
 
 ## Website pairing
 
@@ -30,4 +34,4 @@ npm test
 npm run build
 ```
 
-The current release baseline is `0.3.4`. Publish it only after the website API and the Agent download channel are available.
+The current package version is defined by `package.json`. Publish an installer only after its platform signing, clean-device lifecycle, rollback, and uninstall gates pass. Compatibility archives remain available for development and recovery.

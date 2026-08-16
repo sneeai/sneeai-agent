@@ -1,13 +1,14 @@
 #!/usr/bin/env node
-import { startHttpServer, waitForHttpServer } from "./server/http.js";
+import { startHttpServerWithFallback } from "./server/http.js";
 import { startMcpServer } from "./server/mcp.js";
-import { loadConfig, saveConfig } from "./config.js";
+import { allowInsecureTestCredentials, ensureSecureConfig, loadConfig, migrateConfigCredential, rotateConfigToken, saveConfig, VERSION } from "./config.js";
 import { canvasConnectionUrl, DEFAULT_CANVAS_URL, openExternalUrl, probeAgent } from "./pairing.js";
-import { VERSION } from "./config.js";
+import { externalFetch } from "./network/external-fetch.js";
 
 const args = process.argv.slice(2).filter((arg) => arg !== "--debug");
 
 if (args[0] === "mcp") {
+    ensureRuntimeConfig();
     await startMcpServer();
 } else if (args[0] === "version") {
     console.log(VERSION);
@@ -17,15 +18,38 @@ if (args[0] === "mcp") {
     console.log(JSON.stringify({ ok: status === "ready", version: VERSION, status, url: config.url, platform: process.platform, node: process.version }, null, 2));
     if (status !== "ready") process.exitCode = 1;
 } else if (args[0] === "check-update") {
-    const response = await fetch("https://sneeai.com/agent-release.json", { headers: { accept: "application/json" } });
+    const response = await externalFetch("https://sneeai.com/agent-release.json", { headers: { accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(10_000) });
     if (!response.ok) throw new Error(`Agent version service returned HTTP ${response.status}`);
     const release = await response.json() as { latest_version?: unknown; download_page_url?: unknown };
     const latestVersion = typeof release.latest_version === "string" ? release.latest_version : "";
     if (!latestVersion) throw new Error("Agent version service returned an invalid response");
     console.log(JSON.stringify({ current_version: VERSION, latest_version: latestVersion, update_available: latestVersion !== VERSION, download_page_url: release.download_page_url || "https://sneeai.com/agent" }, null, 2));
+} else if (args[0] === "migrate-credentials") {
+    if (args[1] !== "--confirm") {
+        console.error("未修改配置。确认将现有 Connect token 迁移到当前系统用户的安全存储后，运行 migrate-credentials --confirm。");
+        process.exitCode = 2;
+    } else {
+        const result = migrateConfigCredential(loadConfig(true));
+        console.log(JSON.stringify({ ok: true, ...result }, null, 2));
+    }
+} else if (args[0] === "rotate-token") {
+    if (args[1] !== "--confirm") {
+        console.error("未轮换 token。轮换会使旧的本机连接凭据失效；停止 Agent 后运行 rotate-token --confirm。");
+        process.exitCode = 2;
+    } else {
+        const config = loadConfig(true);
+        const status = await probeAgent(config);
+        if (status === "ready") {
+            console.error("未轮换 token：Agent 仍在运行。请先停止 Agent，再重试此显式轮换命令。");
+            process.exitCode = 1;
+        } else {
+            const result = rotateConfigToken(config);
+            console.log(JSON.stringify({ ok: true, ...result, restartRequired: true, existingPairingsInvalidated: true }, null, 2));
+        }
+    }
 } else if (args[0] === "open") {
     const canvasUrl = args[1] || DEFAULT_CANVAS_URL;
-    const config = loadConfig(true);
+    const config = ensureRuntimeConfig();
     const pairedUrl = canvasConnectionUrl(canvasUrl, config);
     const canvasOrigin = new URL(pairedUrl).origin;
     config.origins ||= [];
@@ -50,8 +74,15 @@ if (args[0] === "mcp") {
         console.error("本机端口已被其他服务或不同版本的 Sneeai Agent 占用。请停止该进程后重新运行此命令。");
         process.exitCode = 1;
     } else {
-        await waitForHttpServer(startHttpServer({ openCanvasUrl: canvasUrl }));
+        await startHttpServerWithFallback({ openCanvasUrl: canvasUrl });
     }
 } else {
-    await waitForHttpServer(startHttpServer());
+    ensureRuntimeConfig();
+    await startHttpServerWithFallback();
+}
+
+function ensureRuntimeConfig() {
+    // Insecure credentials are only available to the test harness. A user-set
+    // environment variable must never downgrade a packaged Agent.
+    return allowInsecureTestCredentials() ? loadConfig(true) : ensureSecureConfig();
 }

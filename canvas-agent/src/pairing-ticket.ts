@@ -2,10 +2,11 @@ import crypto from "node:crypto";
 
 export const PAIRING_TICKET_TTL_MS = 5 * 60 * 1000;
 export const EVENT_TICKET_TTL_MS = 30 * 1000;
+export const INTERNAL_MCP_TICKET_TTL_MS = 30 * 60 * 1000;
 const TICKET_PREFIX = "cat1";
 const MAX_TICKET_LENGTH = 4096;
 
-export type AgentTicketKind = "pairing" | "events";
+export type AgentTicketKind = "pairing" | "events" | "internal-mcp";
 export type AgentTicketAuthorization = {
     subject: string;
     deviceId: string;
@@ -69,7 +70,7 @@ export function verifyAgentTicket(
     let claims: AgentTicketClaims;
     try {
         const parsed = JSON.parse(decode(parts[1])) as Partial<AgentTicketClaims>;
-        if (parsed.version !== 1 || (parsed.kind !== "pairing" && parsed.kind !== "events") || typeof parsed.origin !== "string" || typeof parsed.profileKey !== "string" || !validClientId(parsed.clientId) || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.nonce !== "string" || !validAuthorization(parsed.authorization)) return { ok: false, reason: "invalid" };
+        if (parsed.version !== 1 || !["pairing", "events", "internal-mcp"].includes(String(parsed.kind)) || typeof parsed.origin !== "string" || typeof parsed.profileKey !== "string" || !validClientId(parsed.clientId) || typeof parsed.issuedAt !== "number" || typeof parsed.expiresAt !== "number" || typeof parsed.nonce !== "string" || !validAuthorization(parsed.authorization)) return { ok: false, reason: "invalid" };
         claims = parsed as AgentTicketClaims;
     } catch {
         return { ok: false, reason: "invalid" };

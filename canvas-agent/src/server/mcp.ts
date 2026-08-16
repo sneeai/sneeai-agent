@@ -1,14 +1,14 @@
+import crypto from "node:crypto";
 import type { Server } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-import { CANVAS_AGENT_PROFILE_ENV, codexRuntimeFingerprint, NESTED_CANVAS_MCP_ENV } from "../agent/codex-runtime.js";
+import { CANVAS_AGENT_INTERNAL_TICKET_ENV, codexRuntimeFingerprint, NESTED_CANVAS_MCP_ENV } from "../agent/codex-runtime.js";
 import { toolDescriptions, toolInputSchemas, toolNames, type ToolName } from "../canvas/schemas.js";
 import { AGENT_PROMPT, AGENT_SERVICE, effectiveCanvasAgentUrl, loadConfig, saveConfig, type CanvasAgentConfig, VERSION } from "../config.js";
 import { probeAgentRuntime, requestAgentHandoff, type AgentRuntimeProbeResult } from "../pairing.js";
 import { isProtocolCompatible, PROTOCOL_VERSION, REQUIRED_TOOL_CAPABILITIES } from "../protocol.js";
-import { CANVAS_PROFILE_HEADER } from "../profile.js";
-import { startHttpServer, waitForHttpServer } from "./http.js";
+import { AgentInstanceLockError, startHttpServerWithFallback } from "./http.js";
 import { compareRuntimeClaims, createRuntimeClaim } from "./runtime-claim.js";
 
 type CanvasAgentToolResponse = { ok?: boolean; result?: unknown; error?: string };
@@ -55,26 +55,27 @@ export async function ensurePluginHttpServer(): Promise<Server | null> {
 function registerCanvasTool(server: McpServer, name: ToolName) {
     const schema = toolInputSchemas[name];
     server.registerTool(name, { description: toolDescriptions[name], inputSchema: schema.shape }, async (input: unknown) => {
-        const result = await postCanvasAgentTool(loadConfig(true), name, schema.parse(input));
+        const result = await postCanvasAgentTool(loadConfig(true), name, schema.parse(input), { operationId: crypto.randomUUID() });
         return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
     });
 }
 
 /** 将 MCP 工具调用转发到本地 Sneeai Agent HTTP 服务。 */
-export async function postCanvasAgentTool(config: CanvasAgentConfig, name: ToolName, input: unknown, profileId = process.env[CANVAS_AGENT_PROFILE_ENV] || "") {
+export async function postCanvasAgentTool(config: CanvasAgentConfig, name: ToolName, input: unknown, options: { internalTicket?: string; operationId?: string } = {}) {
     await requireCompatibleToolBridge(config);
+    const internalTicket = options.internalTicket || process.env[CANVAS_AGENT_INTERNAL_TICKET_ENV] || "";
+    const operationId = options.operationId || crypto.randomUUID();
     const deadline = Date.now() + WEB_CANVAS_WAIT_MS;
     while (true) {
         const res = await fetch(`${config.url}/api/tools`, {
             method: "POST",
             headers: {
                 "content-type": "application/json",
-                "x-canvas-agent-token": config.token,
+                ...(internalTicket ? { "x-canvas-agent-internal-ticket": internalTicket } : { "x-canvas-agent-token": config.token }),
                 "x-canvas-agent-protocol-version": String(PROTOCOL_VERSION),
                 "x-canvas-agent-capabilities": REQUIRED_TOOL_CAPABILITIES.join(","),
-                ...(profileId ? { [CANVAS_PROFILE_HEADER]: profileId } : {}),
             },
-            body: JSON.stringify({ name, input }),
+            body: JSON.stringify({ operationId, name, input }),
         });
         const service = res.headers.get("x-canvas-agent-service");
         const version = res.headers.get("x-canvas-agent-version");
@@ -126,9 +127,9 @@ async function claimHttpBridge(fingerprint: string, initial?: AgentRuntimeProbeR
         }
 
         try {
-            return await waitForHttpServer(startHttpServer({ silent: true, runtimeFingerprint: fingerprint, runtimeClaim }));
+            return await startHttpServerWithFallback({ silent: true, runtimeFingerprint: fingerprint, runtimeClaim });
         } catch (error) {
-            if (!isAddressInUse(error)) throw error;
+            if (!isAddressInUse(error) && !(error instanceof AgentInstanceLockError)) throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, HTTP_RACE_RETRY_MS));
         current = await probeEffectiveAgent();

@@ -6,6 +6,8 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { createInstallerDelivery } from "../../installer/release-plan.mjs";
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BUILD_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
 const ARCHIVE_MTIME = new Date("2000-01-01T00:00:00.000Z");
@@ -205,6 +207,7 @@ export function createReleaseManifest(plan, artifacts) {
             sizeBytes: artifact.sizeBytes,
             sha256: artifact.sha256,
         })),
+        delivery: createInstallerDelivery(plan, artifacts),
     };
 }
 
@@ -265,6 +268,7 @@ export async function sourceBuildId(rootDirectory) {
         "package.json",
         "package-lock.json",
         ...await listFiles(path.join(rootDirectory, "src")),
+        path.resolve(rootDirectory, "..", "installer", "release-plan.mjs"),
     ].sort();
     const hash = createHash("sha256");
     for (const input of inputs) {

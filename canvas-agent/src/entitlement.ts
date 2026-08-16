@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { externalFetch } from "./network/external-fetch.js";
+
 const OFFICIAL_ORIGINS = new Set(["https://sneeai.com"]);
 const DEFAULT_DEVELOPMENT_ORIGINS = new Set([
     "http://127.0.0.1:3000",
@@ -112,7 +114,7 @@ export async function resolveEntitlementPublicKey(origin: string, keyId: string)
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 2500);
     try {
-        const response = await fetch(`${origin}${PUBLIC_KEY_PATH}`, { signal: controller.signal, cache: "no-store", redirect: "error" });
+        const response = await externalFetch(`${origin}${PUBLIC_KEY_PATH}`, { signal: controller.signal, cache: "no-store", redirect: "error" });
         if (!response.ok) throw new Error("public key unavailable");
         const body = await response.json() as PublicKeyDocument;
         if (body.algorithm !== "EdDSA" || body.key_id !== keyId || typeof body.issuer !== "string" || typeof body.public_key !== "string") throw new Error("public key invalid");

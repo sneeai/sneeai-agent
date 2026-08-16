@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
+import fs from "node:fs";
 import type { Server } from "node:http";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
@@ -10,8 +11,8 @@ import { CodexProviderPolicyError } from "../agent/codex-provider-policy.js";
 import { canvasCodexConnectionStatus, canvasCodexMode, CodexConnectionInputError, CodexRelayApiKeyRequiredError, configureCanvasCodexConnection, codexRuntimeFingerprint } from "../agent/codex-runtime.js";
 import type { AgentAttachment, AgentEmit, AgentPermissionMode } from "../agent/types.js";
 import { CanvasCodexControlError, CanvasSession, CanvasToolDecisionError, type CanvasClientAuthorization, type PendingToolProposal } from "../canvas/session.js";
-import { CanvasSessionRegistry } from "../canvas/session-registry.js";
-import { AGENT_SERVICE, BUILD_ID, canvasAgentDeviceId, DEFAULT_PORT, ensureProfileWorkspace, ensureSiteWorkspace, loadConfig, saveConfig, updateProfileWorkspace, updateSiteWorkspace, VERSION, type CanvasAgentConfig } from "../config.js";
+import { CanvasSessionRegistry, CanvasSessionRoutingError } from "../canvas/session-registry.js";
+import { AGENT_SERVICE, BUILD_ID, canvasAgentDeviceId, canvasAgentPortCandidates, CONFIG_DIR, DEFAULT_PORT, ensureProfileWorkspace, ensureSiteWorkspace, loadConfig, saveConfig, updateProfileWorkspace, updateSiteWorkspace, VERSION, type CanvasAgentConfig } from "../config.js";
 import { EntitlementLeaseRegistry } from "../entitlement-lease.js";
 import { canUsePersistentToken, entitlementRequired, EntitlementVerificationError, verifyPlatformEntitlement } from "../entitlement.js";
 import { createAgentPairingIdentity } from "../pairing-identity.js";
@@ -21,6 +22,7 @@ import { ProfileInputError, resolveClientId, resolveProfile, type AgentProfile }
 import { negotiateProtocol, protocolHeaders, protocolMetadata, REQUIRED_PAIRING_CAPABILITIES, REQUIRED_TOOL_CAPABILITIES } from "../protocol.js";
 import { ToolAuthorizationVerificationError, verifyToolAuthorization } from "../tool-authorization.js";
 import { logger } from "../utils/logger.js";
+import { resolveExternalNetworkDiagnostics } from "../network/external-fetch.js";
 import { authorizeAutomaticPairing, authorizeRequestOrigin } from "./cors.js";
 import { LocalFileCapabilityError, LocalFileCapabilityRegistry } from "./local-file-capabilities.js";
 import { compareRuntimeClaims, createRuntimeClaim, isRuntimeClaim } from "./runtime-claim.js";
@@ -47,6 +49,8 @@ type HttpCodexDependencies = {
 };
 
 export type HttpServerOptions = {
+    port?: number;
+    portCandidates?: readonly number[];
     openCanvasUrl?: string;
     silent?: boolean;
     runtimeFingerprint?: string;
@@ -63,6 +67,7 @@ type RequestAuthorization = {
     ticket?: AgentTicketClaims;
     ticketAuthorization?: AgentTicketAuthorization;
     persistent: boolean;
+    internalMcp: boolean;
 };
 
 type RequestWithAuthorization = Request & { canvasAuthorization?: RequestAuthorization };
@@ -80,9 +85,8 @@ class FullPermissionModeError extends Error {
 /** 启动仅监听本机的 Sneeai Agent HTTP 服务。 */
 export function startHttpServer(options: HttpServerOptions = {}) {
     const config = loadConfig(true);
-    const port = Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
+    const port = options.port || Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
     config.url = `http://127.0.0.1:${port}`;
-    saveConfig(config);
     const runtimeFingerprint = options.runtimeFingerprint || codexRuntimeFingerprint();
     const runtimeClaim = isRuntimeClaim(options.runtimeClaim) ? options.runtimeClaim : createRuntimeClaim();
     const now = options.now || Date.now;
@@ -109,6 +113,10 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     let server: Server;
     let handoffAccepted = false;
     let handoffStop: Promise<void> | null = null;
+    let mcpLastSeenAt: number | null = null;
+    let pluginVersion: string | null = null;
+    let mcpActiveBinding: string | null = null;
+    const MCP_LAST_SEEN_TTL_MS = 120_000;
     const rememberProfile = (profile: AgentProfile) => {
         knownProfiles.set(profile.key, profile);
         return profile;
@@ -146,6 +154,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         const url = requestUrl(req, config);
         const requestedProfile = resolveProfile({ origin, headers: req.headers, query: Object.fromEntries(url.searchParams) });
         const requestedClientId = resolveClientId({ origin, headers: req.headers, query: Object.fromEntries(url.searchParams) });
+        const internalMcpTicket = headerValue(req, "x-canvas-agent-internal-ticket");
         const requestedTicket = headerValue(req, "x-canvas-agent-ticket") || headerValue(req, "x-canvas-agent-token");
         const required = Boolean(origin) && entitlementRequired(origin);
         const eventRequest = url.pathname === "/events";
@@ -154,9 +163,19 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         let ticket: AgentTicketClaims | undefined;
         let ticketAuthorization: AgentTicketAuthorization | undefined;
         let persistent = false;
+        let internalMcp = false;
 
-        if (requestedTicket === config.token) {
+        if (internalMcpTicket) {
+            if (origin || url.pathname !== "/api/tools" || requestedTicket || requestedProfile.explicit || requestedClientId) return void res.status(401).json({ ok: false, error: "invalid token" });
+            const verified = verifyAgentTicket(config.token, internalMcpTicket, { kind: "internal-mcp", origin: "local-internal" }, now());
+            if (!verified.ok) return void res.status(401).json({ ok: false, error: "invalid token" });
+            ticket = verified.claims;
+            profile = knownProfiles.get(ticket.profileKey) || { key: ticket.profileKey, id: ticket.profileKey, source: "profile", explicit: true };
+            clientId = "";
+            internalMcp = true;
+        } else if (requestedTicket === config.token) {
             if (eventRequest || required || (origin && !canUsePersistentToken(origin))) return void res.status(401).json({ ok: false, error: "invalid token" });
+            if (requestedProfile.explicit) return void res.status(401).json({ ok: false, error: "invalid token" });
             persistent = true;
         } else {
             const verified = verifyAgentTicket(config.token, requestedTicket, {
@@ -182,6 +201,7 @@ export function startHttpServer(options: HttpServerOptions = {}) {
             ticket,
             ticketAuthorization,
             persistent,
+            internalMcp,
         };
         next();
     };
@@ -255,7 +275,28 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         if (req.method === "OPTIONS") return void res.json({});
         next();
     });
-    app.get("/health", (_req, res) => res.json({ ...sessions.health(), ...protocolMetadata(VERSION, BUILD_ID), service: AGENT_SERVICE, version: VERSION, diagnostics: sessions.health() }));
+    app.get("/health", route(async (_req, res) => {
+        const diagnostics = sessions.health();
+        const network = await resolveExternalNetworkDiagnostics("https://sneeai.com/agent-release.json");
+        const recentMcpLastSeenAt = mcpLastSeenAt !== null && now() >= mcpLastSeenAt && now() - mcpLastSeenAt <= MCP_LAST_SEEN_TTL_MS
+            ? mcpLastSeenAt
+            : null;
+        res.json({
+            ...diagnostics,
+            ...protocolMetadata(VERSION, BUILD_ID),
+            service: AGENT_SERVICE,
+            version: VERSION,
+            agentOnline: true,
+            sitePaired: diagnostics.clients > 0,
+            pluginInstalled: recentMcpLastSeenAt !== null,
+            pluginVersion: recentMcpLastSeenAt !== null ? pluginVersion : null,
+            mcpActiveCanvas: recentMcpLastSeenAt !== null && mcpActiveBinding !== null && mcpActiveBinding === sessions.activeBindingKey(),
+            mcpLastSeenAt: recentMcpLastSeenAt,
+            proxyMode: network.proxyMode,
+            proxyDiagnosticCode: network.diagnosticCode || null,
+            diagnostics,
+        });
+    }));
     app.get("/config", (req, res) => {
         res.setHeader("Cache-Control", "no-store");
         const origin = req.headers.origin || "";
@@ -379,11 +420,12 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         const authorization = requestAuthorization(req);
         const clientId = authorizedClientId(authorization, String(req.query.clientId || ""));
         authorization.session.updateState(req.body, clientId || undefined);
+        if (clientId) sessions.touchCanvas(authorization.profile.key, clientId);
         res.json({ ok: true });
     });
     app.post("/canvas/activate", (req, res) => {
         const authorization = requestAuthorization(req);
-        authorization.session.activateClient(authorizedClientId(authorization, String(req.query.clientId || "")));
+        sessions.activateCanvas(authorization.profile.key, authorizedClientId(authorization, String(req.query.clientId || "")));
         res.json({ ok: true });
     });
     app.post("/canvas/tool-decision", route(async (req, res) => {
@@ -430,7 +472,19 @@ export function startHttpServer(options: HttpServerOptions = {}) {
     app.post("/api/tools", route(async (req, res) => {
         const authorization = requestAuthorization(req);
         if (!requestHasToolProtocol(req)) return res.status(426).json({ ok: false, code: "protocol_incompatible" });
-        res.json({ ok: true, result: await authorization.session.callTool(req.body?.name, req.body?.input || {}) });
+        const localPlugin = authorization.persistent && !authorization.internalMcp && !authorization.profile.explicit && !authorization.clientId;
+        if (localPlugin) {
+            mcpLastSeenAt = now();
+            pluginVersion = boundedPluginVersion(req.headers["x-canvas-plugin-version"]);
+        }
+        const session = localPlugin
+            ? sessions.resolveLocalToolSession()
+            : authorization.session;
+        if (localPlugin) mcpActiveBinding = sessions.activeBindingKey();
+        res.json({ ok: true, result: await session.callTool(req.body?.name, req.body?.input || {}, {
+            ...(localPlugin ? { routing: "active" as const } : {}),
+            operationId: typeof req.body?.operationId === "string" ? req.body.operationId : undefined,
+        }) });
     }));
     app.get("/agent/codex/workspace", route(async (req, res) => {
         const authorization = requestAuthorization(req);
@@ -631,13 +685,15 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         const codexControlError = error instanceof CanvasCodexControlError;
         const localFileError = error instanceof LocalFileCapabilityError;
         const fullPermissionError = error instanceof FullPermissionModeError;
-        const typedError = apiKeyRequired || invalidInput || profileInputError || entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError;
+        const canvasRoutingError = error instanceof CanvasSessionRoutingError;
+        const typedError = apiKeyRequired || invalidInput || profileInputError || entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError || canvasRoutingError;
         const status = providerBlocked ? 403 : typedError ? error.statusCode : 500;
-        const code = providerBlocked ? "codex_provider_not_allowed" : apiKeyRequired ? "relay_api_key_required" : entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError ? error.code : "";
+        const code = providerBlocked ? "codex_provider_not_allowed" : apiKeyRequired ? "relay_api_key_required" : entitlementError || toolAuthorizationError || toolDecisionError || codexControlError || localFileError || fullPermissionError || canvasRoutingError ? error.code : "";
         res.status(status).json({ ok: false, ...(code ? { code } : {}), ...((providerBlocked || apiKeyRequired) ? publicCodexConnection(config) : {}), error: error.message });
     });
 
     server = app.listen(port, "127.0.0.1", () => {
+        saveConfig(config);
         if (!options.silent) {
             console.log("Sneeai Agent");
             console.log(`Local URL: ${config.url}`);
@@ -654,6 +710,109 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         }
     });
     return server;
+}
+
+/** 在约定的本机端口范围内选择可用端口；不扫描用户任意端口。 */
+export async function startHttpServerWithFallback(options: HttpServerOptions = {}) {
+    const releaseInstanceLock = acquireAgentInstanceLock();
+    try {
+        const config = loadConfig(true);
+        const configuredPort = options.port || Number(process.env.PORT) || Number(new URL(config.url).port) || DEFAULT_PORT;
+        const candidates = options.portCandidates?.length
+            ? options.portCandidates
+            : Number.isInteger(options.port) || process.env.PORT
+              ? [configuredPort]
+              : canvasAgentPortCandidates(config);
+        let lastError: unknown;
+        for (const port of [...new Set(candidates)]) {
+            const server = startHttpServer({ ...options, port });
+            try {
+                const listening = await waitForHttpServer(server);
+                listening.once("close", releaseInstanceLock);
+                return listening;
+            } catch (error) {
+                lastError = error;
+                if (!isAddressInUse(error)) throw error;
+                await closeHttpServer(server);
+            }
+        }
+        throw lastError instanceof Error ? lastError : new Error("Sneeai Agent 没有可用的本机端口");
+    } catch (error) {
+        releaseInstanceLock();
+        throw error;
+    }
+}
+
+export class AgentInstanceLockError extends Error {
+    readonly code = "EAGENTLOCKED";
+
+    constructor() {
+        super("另一个 Sneeai Agent 进程正在启动或运行");
+        this.name = "AgentInstanceLockError";
+    }
+}
+
+function acquireAgentInstanceLock() {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+    const lockFile = path.join(CONFIG_DIR, "agent-instance.lock");
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const nonce = crypto.randomUUID();
+        let descriptor: number;
+        try {
+            descriptor = fs.openSync(lockFile, "wx", 0o600);
+        } catch (error) {
+            if (!isFileExists(error)) throw error;
+            const owner = readInstanceLock(lockFile);
+            if (owner && processIsAlive(owner.pid)) throw new AgentInstanceLockError();
+            try {
+                fs.unlinkSync(lockFile);
+            } catch (removeError) {
+                if (!isFileMissing(removeError)) throw new AgentInstanceLockError();
+            }
+            continue;
+        }
+        const identity = JSON.stringify({ pid: process.pid, nonce });
+        fs.writeFileSync(descriptor, identity);
+        fs.fsyncSync(descriptor);
+        let released = false;
+        return () => {
+            if (released) return;
+            released = true;
+            fs.closeSync(descriptor);
+            try {
+                if (fs.readFileSync(lockFile, "utf8") === identity) fs.unlinkSync(lockFile);
+            } catch (error) {
+                if (!isFileMissing(error)) logger.warn("Unable to remove Agent instance lock", { error });
+            }
+        };
+    }
+    throw new AgentInstanceLockError();
+}
+
+function readInstanceLock(lockFile: string) {
+    try {
+        const value = JSON.parse(fs.readFileSync(lockFile, "utf8")) as { pid?: unknown };
+        return Number.isInteger(value.pid) && Number(value.pid) > 0 ? { pid: Number(value.pid) } : null;
+    } catch {
+        return null;
+    }
+}
+
+function processIsAlive(pid: number) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return error instanceof Error && "code" in error && error.code === "EPERM";
+    }
+}
+
+function isFileExists(error: unknown) {
+    return error instanceof Error && "code" in error && error.code === "EEXIST";
+}
+
+function isFileMissing(error: unknown) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
 }
 
 /** 等待 HTTP Server 确认监听成功，并将端口错误交给调用方处理。 */
@@ -691,6 +850,10 @@ function closeHttpServer(server: Server) {
     return new Promise<void>((resolve, reject) => {
         server.close((error) => error ? reject(error) : resolve());
     });
+}
+
+function isAddressInUse(error: unknown) {
+    return error instanceof Error && "code" in error && error.code === "EADDRINUSE";
 }
 
 /** 将异步 Express 路由异常交给统一错误处理中间件。 */
@@ -736,6 +899,11 @@ function requestHasToolProtocol(req: Request) {
     const version = headerValue(req, "x-canvas-agent-protocol-version");
     const capabilities = headerValue(req, "x-canvas-agent-capabilities").split(",").map((value) => value.trim()).filter(Boolean);
     return version === "1" && REQUIRED_TOOL_CAPABILITIES.every((capability) => capabilities.includes(capability));
+}
+
+function boundedPluginVersion(value: unknown) {
+    const version = Array.isArray(value) ? value[0] : value;
+    return typeof version === "string" && /^[A-Za-z0-9][A-Za-z0-9.+-]{0,63}$/.test(version) ? version : null;
 }
 
 async function verifyToolPermit(
@@ -792,7 +960,7 @@ function publicCodexConnection(config: CanvasAgentConfig) {
 function setCors(req: Request, res: Response, url: URL, config: CanvasAgentConfig) {
     const origin = req.headers.origin;
     res.setHeader("Access-Control-Allow-Origin", origin || "*");
-    res.setHeader("Access-Control-Allow-Headers", "content-type,x-canvas-agent-token,x-canvas-agent-ticket,x-canvas-agent-entitlement,x-canvas-profile-id,x-canvas-client-id,x-canvas-agent-protocol-version,x-canvas-agent-capabilities");
+    res.setHeader("Access-Control-Allow-Headers", "content-type,x-canvas-agent-token,x-canvas-agent-ticket,x-canvas-agent-entitlement,x-canvas-profile-id,x-canvas-client-id,x-canvas-agent-protocol-version,x-canvas-agent-capabilities,x-canvas-plugin-version");
     res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
     res.setHeader("Access-Control-Allow-Private-Network", "true");
     if (origin) res.setHeader("Vary", "Origin");
