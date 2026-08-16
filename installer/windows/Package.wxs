@@ -21,12 +21,16 @@
     </StandardDirectory>
 
     <Feature Id="MainFeature" Title="SneeAI Agent" Level="1">
-      <Files Include="$(PayloadDir)\**" Directory="INSTALLFOLDER" />
+      <ComponentGroupRef Id="PayloadComponents" />
       <ComponentRef Id="LauncherComponent" />
     </Feature>
 
+    <ComponentGroup Id="PayloadComponents" Directory="INSTALLFOLDER">
+      <Files Include="$(PayloadDir)\**" />
+    </ComponentGroup>
+
     <DirectoryRef Id="INSTALLFOLDER">
-      <Component Id="LauncherComponent" Guid="*">
+      <Component Id="LauncherComponent" Guid="D1C9AE9A-5A5B-4B65-9F42-0E39C5E8871E">
         <File Id="LauncherExe" Source="$(LauncherPath)" Name="sneeai-agent-launcher.exe" />
         <RegistryValue
             Root="HKCU"
