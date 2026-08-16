@@ -697,7 +697,6 @@ export function startHttpServer(options: HttpServerOptions = {}) {
         if (!options.silent) {
             console.log("Sneeai Agent");
             console.log(`Local URL: ${config.url}`);
-            console.log(`Connect token: ${config.token}`);
             console.log("Codex MCP is not installed by this command.");
             console.log("Install the Sneeai plugin in Codex to connect Codex with this Agent.");
             if (logger.enabled) console.log(`Debug log: ${logger.filePath}`);

@@ -12,6 +12,24 @@ const { loadConfig } = await import("../config.js");
 const { startHttpServerWithFallback } = await import("./http.js");
 const { ensurePluginHttpServer } = await import("./mcp.js");
 
+test("Agent startup output never exposes the long-lived Connect token", async (t) => {
+    const port = await availablePort();
+    const token = loadConfig(true).token;
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...values: unknown[]) => output.push(values.map(String).join(" "));
+    let server: Awaited<ReturnType<typeof startHttpServerWithFallback>> | undefined;
+    try {
+        server = await startHttpServerWithFallback({ portCandidates: [port] });
+    } finally {
+        console.log = originalLog;
+    }
+    if (server) t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+    assert.ok(output.some((line) => line.includes("Sneeai Agent")), "non-silent startup path did not run");
+    assert.equal(output.some((line) => line.includes(token)), false);
+});
+
 test("Agent persists the first available port from its fixed candidate list", async (t) => {
     const occupiedPort = await availablePort();
     const fallbackPort = await availablePort();
