@@ -1,4 +1,6 @@
-# Agent release and update policy
+# Archived local Agent release and update policy
+
+> This document applies only to the retained local-runtime compatibility sources. The supported SneeAI user path is the hosted remote MCP service declared by the official Codex plugin. No local installer or compatibility archive may be presented as required for that flow.
 
 ## Delivery channels
 

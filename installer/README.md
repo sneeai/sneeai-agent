@@ -1,4 +1,6 @@
-# Agent installer delivery
+# Archived local Agent installer delivery
+
+> This directory is retained for compatibility and historical development. The official SneeAI Codex plugin now uses the hosted remote MCP service and does not require this installer.
 
 This directory defines the installer handoff without pretending that an EXE or PKG already exists. The current release builder continues to produce reproducible ZIP/TAR compatibility archives. `canvas-agent/release/manifest.json` now also records the expected installer target, its lifecycle mode, and every unresolved signing or platform-validation blocker.
 

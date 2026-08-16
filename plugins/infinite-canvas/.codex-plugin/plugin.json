@@ -1,7 +1,7 @@
 {
   "name": "sneeai",
-  "version": "0.1.0+codex.20260815185619",
-  "description": "Connect Codex to a locally installed Sneeai Agent.",
+  "version": "0.1.0+codex.20260816100608",
+  "description": "Connect Codex to the SneeAI remote MCP service with user-scoped OAuth.",
   "author": {
     "name": "SneeAI",
     "url": "https://sneeai.com/"
@@ -19,8 +19,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Sneeai",
-    "shortDescription": "Connect Codex to your local Sneeai Agent.",
-    "longDescription": "Sneeai is a stable Codex bridge. It connects Codex to the separately installed Sneeai Agent, which operates the current SneeAI canvas and handles local Codex access.",
+    "shortDescription": "Connect Codex to SneeAI with OAuth.",
+    "longDescription": "Sneeai connects Codex to the SneeAI remote MCP service over HTTPS. Codex handles OAuth, while the service isolates tools and canvas access per signed-in user.",
     "developerName": "SneeAI",
     "category": "Productivity",
     "capabilities": [

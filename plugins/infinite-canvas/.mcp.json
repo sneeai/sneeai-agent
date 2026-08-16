@@ -1,9 +1,11 @@
 {
   "mcpServers": {
     "sneeai": {
-      "command": "node",
-      "args": ["./bin/sneeai-bridge.mjs"],
-      "cwd": ".",
+      "type": "http",
+      "url": "https://sneeai.com/api/v1/agent/mcp",
+      "oauth": {
+        "client_id": "sneeai-codex-plugin"
+      },
       "startup_timeout_sec": 20,
       "tool_timeout_sec": 90
     }

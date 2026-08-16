@@ -1,11 +1,13 @@
 ---
 name: open-canvas
-description: 打开 SneeAI 在线或本地画布，并连接用户已安装的本机 Sneeai Agent。用户要求打开、启动、进入或使用 SneeAI 画布时使用。
+description: 打开 SneeAI 在线或本地画布，并通过远程 MCP 服务连接当前用户。用户要求打开、启动、进入或使用 SneeAI 画布时使用。
 ---
 
 # Open SneeAI Canvas
 
-默认打开在线版。只有用户明确要求使用本地项目时，才启动本地前端。
+默认打开在线版。插件通过远程 MCP 服务工作，不启动 Node Bridge，不要求用户安装或保持本机 Agent 进程运行。
+
+前提：`https://sneeai.com/api/v1/agent/mcp` 及其 OAuth 元数据已由服务端部署并通过验收。仅安装本插件不会创建远程服务；服务未发布时应明确报告暂不可用。
 
 ## 在线版
 
@@ -15,9 +17,9 @@ description: 打开 SneeAI 在线或本地画布，并连接用户已安装的�
 https://sneeai.com/canvas?mode=new
 ```
 
-2. 网页会自动发现已经运行的本机 Sneeai Agent，并通过网站授权完成配对。
+2. 如果 Codex 尚未获得 SneeAI 授权，使用 Codex 的 MCP OAuth 登录流程完成授权。
 
-3. Agent 未安装、未启动或版本不兼容时，告知用户先在 SneeAI 下载页安装或更新 Agent；不要自行通过 npm 下载、升级或启动 Agent。
+3. 授权后调用当前 SneeAI 画布工具；用户和画布由远程服务按 OAuth subject 隔离。
 
 ## 本地版
 
@@ -29,15 +31,19 @@ pnpm install
 pnpm dev
 ```
 
-2. 用户已经启动本机 Sneeai Agent 后，打开：
+2. 打开：
 
 ```text
 <Vite Local 地址>/canvas?mode=new
 ```
 
+本地前端仍通过同一个远程 MCP 服务工作，不读取本机 Agent 配置，也不接受手工 token。
+
 ## MCP 与连接边界
 
-插件只启动 Sneeai Codex Bridge。Bridge 将 MCP 工具请求转发到已经安装并运行的本机 Sneeai Agent；它不会下载、启动、升级 Agent，也不处理网站授权凭据。
+插件只声明 `sneeai` 远程 MCP 服务：`https://sneeai.com/api/v1/agent/mcp`。Codex 负责 HTTPS、OAuth 登录和 token 刷新；插件不保存或转发 bearer token。服务端必须在每次请求上按 OAuth subject 执行用户隔离、工具授权和画布绑定。
+
+远程服务不可用、OAuth 过期、画布不存在或协议不兼容时，停止重试并给出明确恢复动作；不得猜测其他用户或画布，也不得重复执行写操作。
 
 ## 打开模式
 

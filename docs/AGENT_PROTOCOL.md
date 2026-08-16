@@ -1,12 +1,12 @@
 # SneeAI Agent plugin protocol boundary
 
-This document defines the stable boundary for the official Codex plugin and user-developed plugins. It documents ownership and compatibility; it does not expose website credentials or allow plugins to select arbitrary user sessions.
+This document defines the target stable boundary for the official Codex plugin and user-developed plugins. The plugin is configured to reach the remote SneeAI MCP service over streamable HTTP and OAuth; local Node bridges are not part of the supported distribution path. The remote MCP endpoint and OAuth metadata are release prerequisites and are not implemented by the plugin configuration itself. This document describes ownership and compatibility; it is not evidence that the remote service has been deployed.
 
 ## Responsibilities
 
-The plugin supplies the local Agent endpoint/token discovered by the supported local configuration, a tool name, validated tool arguments, and a unique operation identifier when the protocol supports it. The Agent owns authentication, authorization, active-canvas selection, session isolation, write serialization, duplicate suppression, and user confirmation for privileged operations.
+The plugin supplies an MCP server name, tool name, validated tool arguments, and a unique operation identifier when the protocol supports it. Codex owns the remote OAuth session. The SneeAI service owns authentication, authorization, active-canvas selection, user isolation, write serialization, duplicate suppression, and user confirmation for privileged operations.
 
-A plugin must not depend on website `profileId`, browser `clientId`, pairing tickets, internal ports, or Agent storage paths. Those values are Agent implementation details. A custom plugin must use the same local contract as the official plugin and cannot bypass Agent policy.
+A plugin must not depend on website `profileId`, browser `clientId`, OAuth tokens, pairing tickets, internal ports, Agent storage paths, or another user's identifiers. Those values are service implementation details. A custom plugin must use the same remote MCP contract as the official plugin and cannot bypass service policy.
 
 ## Compatibility rules
 
@@ -17,17 +17,17 @@ A plugin must not depend on website `profileId`, browser `clientId`, pairing tic
 - Missing or ambiguous canvas state is a normal connection error, not permission to guess another user or tab.
 - A repeated operation identifier returns the recorded result and must not execute the same write twice.
 
-`POST /api/tools` accepts a UUID `operationId` beside `name` and `input`. The official bridge creates one identifier per MCP invocation and preserves it across HTTP retries. Within the same isolated Agent session, the first invocation owns that identifier; concurrent and later retries with the same tool and normalized input reuse its pending or recorded result. Reusing the identifier with different content fails with `operation_id_conflict`. The bounded cache is intentionally in-memory, so an Agent restart clears unfinished work instead of replaying it.
+The remote service must support a unique operation identifier for every write when the public tool schema exposes one. Codex or the calling plugin preserves that identifier across transport retries. For the same OAuth subject, a repeated identifier with the same tool and normalized input returns the pending or recorded result; reusing it with different content fails with `operation_id_conflict`. Idempotency ownership and retention belong to the remote service, not to plugin-local memory.
 
-The Agent advertises automatic local routing as `mcp.active-canvas.v1`. It is additive rather than a required legacy-plugin capability: existing plugins keep sending only the local endpoint/token, while the Agent selects the most recently activated valid canvas. The plugin remains unaware of browser session identifiers.
+The target service capability for current-canvas routing is `mcp.active-canvas.v1`. It is additive rather than a required legacy-plugin capability: existing tool names and argument shapes remain valid, while the service selects the most recently activated valid canvas for the authorized OAuth subject. The plugin remains unaware of browser session identifiers. Production documentation may state that this capability is available only after the server advertises it.
 
-The persistent local plugin token cannot select a profile. When the website starts its own nested Codex MCP for an Agent turn, the Agent supplies a separate, short-lived `internal-mcp` ticket bound to that exact profile. This internal credential is accepted only without a browser origin and only on the local tool endpoint; custom plugins do not receive it. Ordinary plugin calls always use the current active canvas, while the internal nested MCP may retain the canvas bound to its running website turn.
+OAuth credentials are managed by Codex and are never embedded in plugin files, prompts, URLs, or tool arguments. Every remote request is evaluated for the signed-in OAuth subject; a plugin cannot choose a profile, browser client, or canvas outside that subject. Website-internal tickets, if used by the service, are not exposed to plugins.
 
 ## Security boundary
 
-The local endpoint remains loopback-only and authenticates every request. Browser origin checks, short-lived website tickets, local plugin credentials, and privileged-tool confirmation are separate controls. Possession of an installed plugin does not grant file, command, or cross-user access.
+The remote endpoint must require HTTPS and authenticate every request. OAuth subject checks, service-side canvas binding, transport protections, and privileged-tool confirmation are separate controls. Possession of an installed plugin does not grant file, command, or cross-user access.
 
-Custom plugins must never read or log long-lived website tokens, provider keys, proxy passwords, or another system user's Agent configuration. They must not connect to arbitrary remote Agents or download executable code at runtime.
+Custom plugins must never read or log OAuth tokens, provider keys, proxy passwords, or another system user's Agent configuration. They must connect only to the declared SneeAI MCP origin and must not download executable code at runtime.
 
 ## Error contract
 

@@ -1,6 +1,8 @@
 # SneeAI Codex Plugin
 
-SneeAI is the stable Codex-side bridge for a separately installed SneeAI Agent. Users install the plugin in Codex and download the Agent from the SneeAI website; the Agent owns local discovery and current-canvas routing.
+SneeAI is configured as a Codex plugin for the SneeAI remote MCP service. The target connection uses Codex's streamable HTTP transport and user-scoped OAuth; it does not start a Node process, require a local bridge, or ask the user to copy an Agent URL or token.
+
+This repository contains the client declaration, not the remote MCP or OAuth server. The endpoint and its OAuth metadata must be deployed and verified before this plugin is released as usable.
 
 ## Install
 
@@ -16,13 +18,19 @@ Windows PowerShell uses `"$PWD"` instead of `"$(pwd)"`.
 ## Use
 
 1. Install this Codex plugin once.
-2. Download and install SneeAI Agent from the SneeAI website.
-3. Open a new Codex task and say: `打开并连接 SneeAI Canvas`.
+2. Start a Codex task that uses SneeAI. Codex opens the SneeAI OAuth flow when authorization is needed.
+3. Approve the requested SneeAI permissions, then say: `打开并连接 SneeAI Canvas`.
 
-The plugin contains its small Codex bridge, but not the Agent runtime. It does not download, start, or pin an Agent version. Agent upgrades are independent. If the Agent is missing, stopped, or incompatible, the bridge reports that the user should download or update it.
+Codex stores and refreshes the OAuth session for the public client `sneeai-codex-plugin`. This client ID is not a secret. The plugin never receives a website password, refresh token, API key, local file path, or another user's session. If the remote MCP service is unavailable or authorization expires, Codex reports a retryable connection error and offers OAuth login again.
+
+The remote endpoint is declared in `.mcp.json` as `https://sneeai.com/api/v1/agent/mcp`. It must advertise standard MCP OAuth metadata before a production release; a configuration file alone does not create the server endpoint.
+
+Use Codex's supported MCP OAuth login flow when the service requests authorization. Current Codex clients also expose `codex mcp login sneeai` for an explicit login after the server publishes valid OAuth metadata. Do not put a bearer token in this repository or in plugin configuration.
+
+The plugin keeps the existing SneeAI tool names and protocol-major compatibility contract. Additive response fields are safe; removing a tool or narrowing its arguments requires a protocol-major change.
 
 ## Secondary development
 
-This plugin directory is licensed under `AGPL-3.0-only`. Custom distributions must use a distinct plugin name, branding, and marketplace identity. Plugins may extend prompts, skills, workflows, and authorized tools, but must not bypass Agent authorization, read website credentials, or choose arbitrary users or browser sessions.
+This plugin directory is licensed under `AGPL-3.0-only`. Custom distributions must use a distinct plugin name, branding, and marketplace identity. Plugins may extend prompts, skills, workflows, and authorized tools, but must not bypass service authorization, read website credentials, or choose arbitrary users or browser sessions.
 
 See [plugin development](../../docs/PLUGIN_DEVELOPMENT.md) and the [Agent protocol boundary](../../docs/AGENT_PROTOCOL.md).

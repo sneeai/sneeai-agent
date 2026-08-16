@@ -1,6 +1,6 @@
 # SneeAI
 
-SneeAI connects the Codex plugin to an independently installed local Agent. The intended user flow has two visible steps: install the SneeAI plugin in Codex, then download the Agent from `sneeai.com`. Connection and current-canvas routing are Agent responsibilities; users should not need to copy ports, URLs, or tokens.
+SneeAI connects Codex to the active canvas through the SneeAI-hosted remote MCP service. The supported user flow is: install the SneeAI plugin in Codex, sign in to `sneeai.com`, unlock Agent, and approve the Codex OAuth request. Users do not install Node.js, download a local Agent, copy ports, URLs, or tokens, or keep a desktop process open.
 
 ## Install the Codex plugin
 
@@ -13,24 +13,15 @@ codex plugin add sneeai@sneeai
 
 On Windows PowerShell, use `$PWD` instead of `$(pwd)`.
 
-## Agent delivery
+## Current remote service
 
-Production users should receive a signed Windows installer or a signed and notarized macOS installer. The current build script still produces ZIP/TAR compatibility archives for development, recovery, and installer input. Those archives are not one-click installers and must not be presented as such while installer delivery remains blocked.
+The official plugin declares `https://sneeai.com/api/v1/agent/mcp` as a streamable HTTP MCP server. Codex owns the OAuth session; the SneeAI service owns user isolation, entitlement checks, active-canvas routing, operation authorization, and duplicate suppression.
 
-See [installer/README.md](installer/README.md) and [docs/AGENT_RELEASE.md](docs/AGENT_RELEASE.md) for the factual release status.
+The endpoint, OAuth metadata, and browser canvas gateway must be deployed together before the production flow is usable.
 
-## Start the local Agent during development
+## Archived local runtime
 
-```bash
-cd canvas-agent
-npm install
-npm run build
-npm start
-```
-
-The Agent is not distributed through npm and is updated independently from the Codex plugin. Codex credentials stay on the user's device.
-
-See [canvas-agent/README.md](canvas-agent/README.md) for commands and configuration.
+`canvas-agent/`, `plugin-bridge/`, and `installer/` remain as compatibility and historical development sources. They are not part of the supported user installation path, and the official plugin no longer bundles or starts the local Node bridge. See [the archived release policy](docs/AGENT_RELEASE.md) when maintaining those sources.
 
 ## Plugin extensions
 

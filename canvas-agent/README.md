@@ -1,4 +1,6 @@
-# SneeAI Agent
+# Archived local SneeAI Agent
+
+> This runtime is retained for compatibility and development. It is not part of the supported SneeAI user flow; the official Codex plugin connects to the hosted remote MCP service.
 
 Sneeai Agent is the independent local runtime for SneeAI. Users download and update it separately from the Codex plugin. It runs on the user's computer, listens only on `127.0.0.1`, and connects the SneeAI website to the user's local Codex.
 
